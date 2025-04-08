@@ -83,6 +83,7 @@ func (s *ProblemService) AddTestCases(ctx context.Context, req *pb.AddTestCasesR
 	if len(req.Testcases.Run) == 0 && len(req.Testcases.Submit) == 0 {
 		return nil, s.createGrpcError(codes.InvalidArgument, "At least one test case is required", "VALIDATION_ERROR", nil)
 	}
+	fmt.Println(req.Testcases)
 	for _, tc := range req.Testcases.Run {
 		if tc.Input == "" || tc.Expected == "" {
 			return nil, s.createGrpcError(codes.InvalidArgument, "Test case input and expected output are required", "VALIDATION_ERROR", nil)
@@ -143,15 +144,15 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 
 	if req.ProblemId == "" {
 		return &pb.FullValidationByProblemIDResponse{
-			Success: false,
-			Message: "Problem ID is required",
+			Success:   false,
+			Message:   "Problem ID is required",
 			ErrorType: "VALIDATION_ERROR",
 		}, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
-		
+
 	}
 
 	data, problem, err := s.RepoConnInstance.BasicValidationByProblemID(ctx, req)
-	fmt.Println(data,err)
+	// fmt.Println(data, err)
 	if !data.Success {
 		return data, s.createGrpcError(codes.Unimplemented, data.Message, data.ErrorType, err)
 	}
@@ -168,8 +169,13 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 		}
 	}
 
-	s.RepoConnInstance.ToggleProblemValidaition(ctx,req.ProblemId,true)
-	return &pb.FullValidationByProblemIDResponse{Success: true, Message: "Full Validation Successfull",ErrorType: ""}, nil
+	fmt.Println(req.ProblemId)
+	status:= s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, true)
+	message := "Full Valdation Successfull"
+	if !status{
+		message = "Full Validaition is Done, but failed to toggle status"
+	}
+	return &pb.FullValidationByProblemIDResponse{Success: status, Message: message, ErrorType: ""}, nil
 }
 
 func (s *ProblemService) GetSubmissions(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
@@ -186,135 +192,148 @@ func (s *ProblemService) GetProblemByIDSlug(ctx context.Context, req *pb.GetProb
 	return s.RepoConnInstance.GetProblemByIDSlug(ctx, req)
 }
 
-func (s *ProblemService) GetProblemByIDSlugList(ctx context.Context, req *pb.GetProblemByIdListRequest) (*pb.GetProblemByIdListResponse, error) {
+func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProblemByIdListRequest) (*pb.GetProblemByIdListResponse, error) {
 	if req.Page < 1 {
 		req.Page = 1
 	}
 	if req.PageSize < 1 {
 		req.PageSize = 10
 	}
-	return s.RepoConnInstance.GetProblemByIDSlugList(ctx, req)
+	return s.RepoConnInstance.GetProblemByIDList(ctx, req)
 }
 
 func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProblemRequest) (*pb.RunProblemResponse, error) {
-    // Fetch the problem details
-    problem, err := s.RepoConnInstance.GetProblem(ctx, &pb.GetProblemRequest{ProblemId: req.ProblemId})
-    if err != nil {
-        return nil, fmt.Errorf("problem not found: %w", err)
-    }
+	// Fetch the problem details
+	problem, err := s.RepoConnInstance.GetProblem(ctx, &pb.GetProblemRequest{ProblemId: req.ProblemId})
+	if err != nil {
+		return nil, fmt.Errorf("problem not found: %w", err)
+	}
 
-    // Validate the requested language
-    validateCode, ok := problem.Problem.ValidateCode[req.Language]
-    if !ok {
-        return &pb.RunProblemResponse{
-            Success:       false,
-            ErrorType:     "INVALID_LANGUAGE",
-            Message:       "Language not supported",
-            ProblemId:     req.ProblemId,
-            Language:      req.Language,
-            IsRunTestcase: req.IsRunTestcase,
-        }, nil
-    }
+	// fmt.Println(problem)
 
-    // Prepare test cases
-    var testCases []model.TestCase
-    if req.IsRunTestcase { 
-        for _, tc := range problem.Problem.Testcases.Run {
-            if tc.Id != "" {
-                testCases = append(testCases, model.TestCase{
-                    ID:       tc.Id,
-                    Input:    tc.Input,
-                    Expected: tc.Expected,
-                })
-            }
-        }
-    } else {
-        for _, tc := range append(problem.Problem.Testcases.Run, problem.Problem.Testcases.Submit...) {
-            if tc.Id != "" {
-                testCases = append(testCases, model.TestCase{
-                    ID:       tc.Id,
-                    Input:    tc.Input,
-                    Expected: tc.Expected,
-                })
-            }
-        }
-    }
+	// Validate the requested language
+	validateCode, ok := problem.Problem.ValidateCode[req.Language]
+	if !ok {
+		return &pb.RunProblemResponse{
+			Success:       false,
+			ErrorType:     "INVALID_LANGUAGE",
+			Message:       "Language not supported",
+			ProblemId:     req.ProblemId,
+			Language:      req.Language,
+			IsRunTestcase: req.IsRunTestcase,
+		}, nil
+	}
 
-		
+	// Prepare test cases
+	var testCases []model.TestCase
+	if req.IsRunTestcase {
+		for _, tc := range problem.Problem.Testcases.Run {
+			if tc.Id != "" {
+				testCases = append(testCases, model.TestCase{
+					ID:       tc.Id,
+					Input:    tc.Input,
+					Expected: tc.Expected,
+				})
+			}
+		}
+	} else {
+		for _, tc := range append(problem.Problem.Testcases.Run, problem.Problem.Testcases.Submit...) {
+			if tc.Id != "" {
+				testCases = append(testCases, model.TestCase{
+					ID:       tc.Id,
+					Input:    tc.Input,
+					Expected: tc.Expected,
+				})
+			}
+		}
+	}
 
-    // Marshal test cases to JSON
-    testCasesJSON, err := json.Marshal(testCases)
-    if err != nil {
-        return nil, fmt.Errorf("failed to marshal test cases: %w", err)
-    }
+	// Marshal test cases to JSON
+	testCasesJSON, err := json.Marshal(testCases)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal test cases: %w", err)
+	}
 
-    // Replace placeholders in the template
-    tmpl := strings.Replace(validateCode.Template, "{FUNCTION_PLACEHOLDER}", req.UserCode, 1)
-    tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", string(testCasesJSON), 1)
+	// fmt.Println(string(testCasesJSON))
+	// testCasesJSON = []byte(strings.Replace(string(testCasesJSON), `/"`, `//"`, -1))
+	// fmt.Println(string(testCasesJSON))
 
-		fmt.Println(tmpl)
+	// Replace placeholders in the template
+	tmpl := validateCode.Template
+	if req.Language == "python" || req.Language == "javascript" ||req.Language =="py" || req.Language == "js"{
+		escaped := strings.ReplaceAll(string(testCasesJSON), `"`, `\"`)
+		tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", escaped, 1)
+	} else {
+		// escaped := strings.ReplaceAll(string(testCasesJSON), `"`, `\"`)
+		tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", string(testCasesJSON), 1)
+	}
 
-    // Prepare the compiler request
-    compilerRequest := map[string]interface{}{
-        "code":     tmpl,
-        "language": req.Language,
-    }
-    compilerRequestBytes, err := json.Marshal(compilerRequest)
-    if err != nil {
-        return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
-    }
+	tmpl = strings.Replace(tmpl, "{FUNCTION_PLACEHOLDER}", req.UserCode, 1)
+	// tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", string(testCasesJSON), 1)
 
-    // Send the request to the NATS client
-    msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 15*time.Second)
-    if err != nil {
-        return &pb.RunProblemResponse{
-            Success:       false,
-            ErrorType:     "COMPILATION_ERROR",
-            Message:       "Failed to execute code",
-            ProblemId:     req.ProblemId,
-            Language:      req.Language,
-            IsRunTestcase: req.IsRunTestcase,
-        }, nil
-    }
+	// fmt.Println(tmpl)
 
-    // Parse the response
-    var result map[string]interface{}
-    if err := json.Unmarshal(msg.Data, &result); err != nil {
-        return nil, fmt.Errorf("failed to parse execution result: %w", err)
-    }
+	// Prepare the compiler request
+	compilerRequest := map[string]interface{}{
+		"code":     tmpl,
+		"language": req.Language,
+	}
+	compilerRequestBytes, err := json.Marshal(compilerRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
+	}
 
-    // Extract the output
-    output, ok := result["output"].(string)
-    if !ok {
-        return &pb.RunProblemResponse{
-            Success:       false,
-            ErrorType:     "EXECUTION_ERROR",
-            Message:       "Invalid execution result format",
-            ProblemId:     req.ProblemId,
-            Language:      req.Language,
-            IsRunTestcase: req.IsRunTestcase,
-        }, nil
-    }
+	// Send the request to the NATS client
+	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 15*time.Second)
+	if err != nil {
+		return &pb.RunProblemResponse{
+			Success:       false,
+			ErrorType:     "COMPILATION_ERROR",
+			Message:       "Failed to execute code",
+			ProblemId:     req.ProblemId,
+			Language:      req.Language,
+			IsRunTestcase: req.IsRunTestcase,
+		}, nil
+	}
 
-    // Check for compilation errors
-    if strings.Contains(output, "syntax error") || strings.Contains(output, "# command-line-arguments") {
-        return &pb.RunProblemResponse{
-            Success:       false,
-            ErrorType:     "COMPILATION_ERROR",
-            Message:       output,
-            ProblemId:     req.ProblemId,
-            Language:      req.Language,
-            IsRunTestcase: req.IsRunTestcase,
-        }, nil
-    }
+	// Parse the response
+	var result map[string]interface{}
+	if err := json.Unmarshal(msg.Data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse execution result: %w", err)
+	}
 
-    return &pb.RunProblemResponse{
-        Success:       true,
-        ProblemId:     req.ProblemId,
-        Language:      req.Language,
-        IsRunTestcase: req.IsRunTestcase,
-        Message:       output,
-    }, nil
+	// Extract the output
+	output, ok := result["output"].(string)
+	if !ok {
+		return &pb.RunProblemResponse{
+			Success:       false,
+			ErrorType:     "EXECUTION_ERROR",
+			Message:       "Invalid execution result format",
+			ProblemId:     req.ProblemId,
+			Language:      req.Language,
+			IsRunTestcase: req.IsRunTestcase,
+		}, nil
+	}
+
+	// Check for compilation errors
+	if strings.Contains(output, "syntax error") || strings.Contains(output, "# command-line-arguments") {
+		return &pb.RunProblemResponse{
+			Success:       false,
+			ErrorType:     "COMPILATION_ERROR",
+			Message:       output,
+			ProblemId:     req.ProblemId,
+			Language:      req.Language,
+			IsRunTestcase: req.IsRunTestcase,
+		}, nil
+	}
+
+	return &pb.RunProblemResponse{
+		Success:       true,
+		ProblemId:     req.ProblemId,
+		Language:      req.Language,
+		IsRunTestcase: req.IsRunTestcase,
+		Message:       output,
+	}, nil
 }
 
 // [

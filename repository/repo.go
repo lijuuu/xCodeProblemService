@@ -470,9 +470,12 @@ func (r *Repository) BasicValidationByProblemID(ctx context.Context, req *pb.Ful
 
 func (r *Repository) ToggleProblemValidaition(ctx context.Context, problemID string, status bool) bool {
 	now := time.Now()
+	problemUUID,_ := primitive.ObjectIDFromHex(problemID)
 	update := bson.M{"$set": bson.M{"validated": status, "validated_at": now, "updated_at": now}}
-	_, err := r.collection.UpdateOne(ctx, bson.M{"_id": problemID}, update)
-	return err == nil
+	r.collection.UpdateOne(ctx, bson.M{"_id":problemUUID }, update)
+	var problem model.Problem
+	r.collection.FindOne(ctx, bson.M{"_id": problemUUID, "deleted_at": nil}).Decode(&problem)
+	return problem.Validated
 }
 
 func (r *Repository) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
@@ -521,7 +524,7 @@ func (r *Repository) GetProblemByIDSlug(ctx context.Context, req *pb.GetProblemB
 	}, nil
 }
 
-func (r *Repository) GetProblemByIDSlugList(ctx context.Context, req *pb.GetProblemByIdListRequest) (*pb.GetProblemByIdListResponse, error) {
+func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemByIdListRequest) (*pb.GetProblemByIdListResponse, error) {
 	filter := bson.M{"deleted_at": nil}
 	if len(req.Tags) > 0 {
 		filter["tags"] = bson.M{"$all": req.Tags}

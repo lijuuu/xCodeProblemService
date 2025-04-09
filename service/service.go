@@ -12,6 +12,7 @@ import (
 	"xcode/repository"
 
 	pb "github.com/lijuuu/GlobalProtoXcode/ProblemsService"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -162,7 +163,7 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 			ProblemId:     req.ProblemId,
 			UserCode:      problem.ValidateCode[v].Code,
 			Language:      v,
-			IsRunTestcase: true,
+			IsRunTestcase: false,
 		})
 		if !res.Success {
 			return data, s.createGrpcError(codes.Unimplemented, res.Message, res.ErrorType, errors.New(res.Message))
@@ -170,9 +171,9 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 	}
 
 	fmt.Println(req.ProblemId)
-	status:= s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, true)
+	status := s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, true)
 	message := "Full Valdation Successfull"
-	if !status{
+	if !status {
 		message = "Full Validaition is Done, but failed to toggle status"
 	}
 	return &pb.FullValidationByProblemIDResponse{Success: status, Message: message, ErrorType: ""}, nil
@@ -203,17 +204,19 @@ func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProb
 }
 
 func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProblemRequest) (*pb.RunProblemResponse, error) {
-	// Fetch the problem details
+	//fetch the problem details
 	problem, err := s.RepoConnInstance.GetProblem(ctx, &pb.GetProblemRequest{ProblemId: req.ProblemId})
 	if err != nil {
+		//go s.processSubmission(ctx, req, nil, err, model.ExecutionResult{})
 		return nil, fmt.Errorf("problem not found: %w", err)
 	}
 
-	// fmt.Println(problem)
+	submitCase := !req.IsRunTestcase
 
 	// Validate the requested language
 	validateCode, ok := problem.Problem.ValidateCode[req.Language]
 	if !ok {
+		//go s.processSubmission(ctx, req, nil, err, model.ExecutionResult{})
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "INVALID_LANGUAGE",
@@ -251,27 +254,21 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	// Marshal test cases to JSON
 	testCasesJSON, err := json.Marshal(testCases)
 	if err != nil {
+		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
+
 		return nil, fmt.Errorf("failed to marshal test cases: %w", err)
 	}
 
-	// fmt.Println(string(testCasesJSON))
-	// testCasesJSON = []byte(strings.Replace(string(testCasesJSON), `/"`, `//"`, -1))
-	// fmt.Println(string(testCasesJSON))
-
 	// Replace placeholders in the template
 	tmpl := validateCode.Template
-	if req.Language == "python" || req.Language == "javascript" ||req.Language =="py" || req.Language == "js"{
+	if req.Language == "python" || req.Language == "javascript" || req.Language == "py" || req.Language == "js" {
 		escaped := strings.ReplaceAll(string(testCasesJSON), `"`, `\"`)
 		tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", escaped, 1)
 	} else {
-		// escaped := strings.ReplaceAll(string(testCasesJSON), `"`, `\"`)
 		tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", string(testCasesJSON), 1)
 	}
 
 	tmpl = strings.Replace(tmpl, "{FUNCTION_PLACEHOLDER}", req.UserCode, 1)
-	// tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", string(testCasesJSON), 1)
-
-	// fmt.Println(tmpl)
 
 	// Prepare the compiler request
 	compilerRequest := map[string]interface{}{
@@ -280,12 +277,16 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 	compilerRequestBytes, err := json.Marshal(compilerRequest)
 	if err != nil {
+		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
+
 		return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
 	}
 
 	// Send the request to the NATS client
 	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 15*time.Second)
 	if err != nil {
+		go s.processSubmission(ctx, req, nil, err, "FAILED",submitCase)
+
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "COMPILATION_ERROR",
@@ -299,12 +300,16 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	// Parse the response
 	var result map[string]interface{}
 	if err := json.Unmarshal(msg.Data, &result); err != nil {
+		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
+
 		return nil, fmt.Errorf("failed to parse execution result: %w", err)
 	}
 
 	// Extract the output
 	output, ok := result["output"].(string)
 	if !ok {
+		go s.processSubmission(ctx, req, nil, err, "FAILED",submitCase)
+
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "EXECUTION_ERROR",
@@ -317,6 +322,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 	// Check for compilation errors
 	if strings.Contains(output, "syntax error") || strings.Contains(output, "# command-line-arguments") {
+		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "COMPILATION_ERROR",
@@ -327,6 +333,20 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
+	// Final step: Unmarshal output to ExecutionResult
+	var executionResult model.ExecutionResult
+	if err := json.Unmarshal([]byte(output), &executionResult); err != nil {
+		executionResult = model.ExecutionResult{OverallPass: false}
+	}
+
+	fmt.Println(executionResult)
+	status := "FAILED"
+	if executionResult.OverallPass {
+		status = "SUCCESS"
+	}
+
+	s.processSubmission(ctx, req, nil, nil, status, submitCase)
+
 	return &pb.RunProblemResponse{
 		Success:       true,
 		ProblemId:     req.ProblemId,
@@ -334,6 +354,33 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		IsRunTestcase: req.IsRunTestcase,
 		Message:       output,
 	}, nil
+}
+
+//USERID,score,output, execution_time,difficulty, isFirst
+
+func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProblemRequest, resp *pb.RunProblemResponse, err error, status string, submitCase bool) {
+	if !submitCase {
+		return
+	}
+	var submission model.Submission
+	if req != nil {
+		submission = model.Submission{
+			ID:            primitive.NewObjectID(),
+			UserID:        req.UserId,
+			ProblemID:     req.ProblemId,
+			ChallengeID:   nil,
+			SubmittedAt:   time.Now(),
+			Score:         0,
+			Language:      req.Language,
+			ExecutionTime: 0,
+			Difficulty:    "",
+		}
+	}
+
+	// Update based on execution result
+	submission.Status = status
+
+	s.RepoConnInstance.PushSubmissionData(ctx, &submission, status)
 }
 
 // [

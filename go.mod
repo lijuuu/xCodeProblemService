@@ -4,7 +4,7 @@ go 1.24.1
 
 require (
 	github.com/joho/godotenv v1.5.1
-	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250407070943-75f590b34db1
+	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250409045654-dec3d33612c7
 	github.com/nats-io/nats.go v1.39.1
 	go.mongodb.org/mongo-driver v1.17.3
 	google.golang.org/grpc v1.70.0

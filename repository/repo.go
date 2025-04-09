@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"fmt"
 	"time"
 	"xcode/model"
 
@@ -13,19 +14,23 @@ import (
 )
 
 type Repository struct {
-	mongoclientInstance *mongo.Client
-	collection          *mongo.Collection
+	mongoclientInstance              *mongo.Client
+	problemsCollection               *mongo.Collection
+	submissionsCollection            *mongo.Collection
+	submissionFirstSuccessCollection *mongo.Collection
 }
 
 func NewRepository(client *mongo.Client) *Repository {
 	return &Repository{
-		mongoclientInstance: client,
-		collection:          client.Database("problems_db").Collection("problems"),
+		mongoclientInstance:              client,
+		problemsCollection:               client.Database("problems_db").Collection("problems"),
+		submissionsCollection:            client.Database("submissions_db").Collection("submissions"),
+		submissionFirstSuccessCollection: client.Database("submissions_db").Collection("submissionsfirstsuccess"),
 	}
 }
 
 func (r *Repository) CreateProblem(ctx context.Context, req *pb.CreateProblemRequest) (*pb.CreateProblemResponse, error) {
-	count, err := r.collection.CountDocuments(ctx, bson.M{"title": req.Title, "deleted_at": nil})
+	count, err := r.problemsCollection.CountDocuments(ctx, bson.M{"title": req.Title, "deleted_at": nil})
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +51,7 @@ func (r *Repository) CreateProblem(ctx context.Context, req *pb.CreateProblemReq
 		ValidateCode:       make(map[string]model.CodeData),
 		Validated:          false,
 	}
-	res, err := r.collection.InsertOne(ctx, problem)
+	res, err := r.problemsCollection.InsertOne(ctx, problem)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +64,7 @@ func (r *Repository) UpdateProblem(ctx context.Context, req *pb.UpdateProblemReq
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.UpdateProblemResponse{Success: false, Message: "Problem not found or deleted"}, nil
 	}
@@ -72,7 +77,7 @@ func (r *Repository) UpdateProblem(ctx context.Context, req *pb.UpdateProblemReq
 		if *req.Title == "" {
 			return &pb.UpdateProblemResponse{Success: false, Message: "Title cannot be empty"}, nil
 		}
-		count, err := r.collection.CountDocuments(ctx, bson.M{"title": *req.Title, "_id": bson.M{"$ne": id}, "deleted_at": nil})
+		count, err := r.problemsCollection.CountDocuments(ctx, bson.M{"title": *req.Title, "_id": bson.M{"$ne": id}, "deleted_at": nil})
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +108,7 @@ func (r *Repository) UpdateProblem(ctx context.Context, req *pb.UpdateProblemReq
 	if resetValidation {
 		update["$set"].(bson.M)["validated"] = false
 	}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +125,7 @@ func (r *Repository) DeleteProblem(ctx context.Context, req *pb.DeleteProblemReq
 	}
 	now := time.Now()
 	update := bson.M{"$set": bson.M{"deleted_at": now, "updated_at": now}}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id, "deleted_at": nil}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id, "deleted_at": nil}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +141,7 @@ func (r *Repository) GetProblem(ctx context.Context, req *pb.GetProblemRequest) 
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.GetProblemResponse{}, nil
 	}
@@ -161,7 +166,7 @@ func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsReque
 		}
 	}
 	opts := options.Find().SetSkip(int64(req.Page-1) * int64(req.PageSize)).SetLimit(int64(req.PageSize))
-	cursor, err := r.collection.Find(ctx, filter, opts)
+	cursor, err := r.problemsCollection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +175,7 @@ func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsReque
 	if err = cursor.All(ctx, &problems); err != nil {
 		return nil, err
 	}
-	total, err := r.collection.CountDocuments(ctx, filter)
+	total, err := r.problemsCollection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +197,7 @@ func (r *Repository) AddTestCases(ctx context.Context, req *pb.AddTestCasesReque
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.AddTestCasesResponse{Success: false, Message: "Problem not found"}, nil
 	}
@@ -225,7 +230,7 @@ func (r *Repository) AddTestCases(ctx context.Context, req *pb.AddTestCasesReque
 			"validated":  false,
 		},
 	}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +250,7 @@ func (r *Repository) DeleteTestCase(ctx context.Context, req *pb.DeleteTestCaseR
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.DeleteTestCaseResponse{Success: false, Message: "Problem not found"}, nil
 	}
@@ -272,7 +277,7 @@ func (r *Repository) DeleteTestCase(ctx context.Context, req *pb.DeleteTestCaseR
 		"$pull": bson.M{field: bson.M{"id": req.TestcaseId}},
 		"$set":  bson.M{"updated_at": time.Now(), "validated": false},
 	}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +293,7 @@ func (r *Repository) AddLanguageSupport(ctx context.Context, req *pb.AddLanguage
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.AddLanguageSupportResponse{Success: false, Message: "Problem not found"}, nil
 	}
@@ -312,7 +317,7 @@ func (r *Repository) AddLanguageSupport(ctx context.Context, req *pb.AddLanguage
 			"validated":  false,
 		},
 	}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +333,7 @@ func (r *Repository) UpdateLanguageSupport(ctx context.Context, req *pb.UpdateLa
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.UpdateLanguageSupportResponse{Success: false, Message: "Problem not found"}, nil
 	}
@@ -356,7 +361,7 @@ func (r *Repository) UpdateLanguageSupport(ctx context.Context, req *pb.UpdateLa
 			"validated":  false,
 		},
 	}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +377,7 @@ func (r *Repository) RemoveLanguageSupport(ctx context.Context, req *pb.RemoveLa
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.RemoveLanguageSupportResponse{Success: false, Message: "Problem not found"}, nil
 	}
@@ -394,7 +399,7 @@ func (r *Repository) RemoveLanguageSupport(ctx context.Context, req *pb.RemoveLa
 		"$unset": bson.M{"validate_code." + req.Language: ""},
 		"$set":   bson.M{"updated_at": time.Now(), "validated": false},
 	}
-	result, err := r.collection.UpdateOne(ctx, bson.M{"_id": id}, update)
+	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
 	}
@@ -410,7 +415,7 @@ func (r *Repository) GetLanguageSupports(ctx context.Context, req *pb.GetLanguag
 		return nil, err
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.GetLanguageSupportsResponse{Success: false, Message: "Problem not found"}, nil
 	}
@@ -439,7 +444,7 @@ func (r *Repository) BasicValidationByProblemID(ctx context.Context, req *pb.Ful
 		return &pb.FullValidationByProblemIDResponse{Success: false, Message: "Invalid problem ID", ErrorType: "INVALID_ID"}, model.Problem{}, nil
 	}
 	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err != nil {
 		return &pb.FullValidationByProblemIDResponse{Success: false, Message: "Problem not found", ErrorType: "NOT_FOUND"}, model.Problem{}, nil
 	}
@@ -470,32 +475,84 @@ func (r *Repository) BasicValidationByProblemID(ctx context.Context, req *pb.Ful
 
 func (r *Repository) ToggleProblemValidaition(ctx context.Context, problemID string, status bool) bool {
 	now := time.Now()
-	problemUUID,_ := primitive.ObjectIDFromHex(problemID)
+	problemUUID, _ := primitive.ObjectIDFromHex(problemID)
 	update := bson.M{"$set": bson.M{"validated": status, "validated_at": now, "updated_at": now}}
-	r.collection.UpdateOne(ctx, bson.M{"_id":problemUUID }, update)
+	r.problemsCollection.UpdateOne(ctx, bson.M{"_id": problemUUID}, update)
 	var problem model.Problem
-	r.collection.FindOne(ctx, bson.M{"_id": problemUUID, "deleted_at": nil}).Decode(&problem)
+	r.problemsCollection.FindOne(ctx, bson.M{"_id": problemUUID, "deleted_at": nil}).Decode(&problem)
 	return problem.Validated
 }
 
 func (r *Repository) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
-	id, err := primitive.ObjectIDFromHex(*req.ProblemId)
-	if err != nil {
-		return &pb.GetSubmissionsResponse{Success: false, Message: "Invalid problem ID", ErrorType: "INVALID_ID"}, nil
+	var filter bson.M
+	if req.ProblemId != nil {
+		id, err := primitive.ObjectIDFromHex(*req.ProblemId)
+		if err != nil {
+			return &pb.GetSubmissionsResponse{Success: false, Message: "invalid problem id", ErrorType: "INVALID_ID"}, nil
+		}
+		var problem struct{}
+		err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+		if err != nil {
+			return &pb.GetSubmissionsResponse{Success: false, Submissions: []*pb.Submission{}, Message: "problem not found", ErrorType: "NOT_FOUND"}, nil
+		}
+		filter = bson.M{"problemId": *req.ProblemId}
+	} else {
+		filter = bson.M{}
 	}
-	var problem model.Problem
-	err = r.collection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
-	if err == mongo.ErrNoDocuments {
-		return &pb.GetSubmissionsResponse{Success: false, Message: "Problem not found", ErrorType: "NOT_FOUND"}, nil
+
+	if req.UserId != "" {
+		filter["userId"] = req.UserId
 	}
+
+	limit := req.Limit
+	if limit == 0 {
+		limit = 10
+	}
+	page := req.Page
+	if page == 0 {
+		page = 1
+	}
+	skip := (page - 1) * limit
+
+	cursor, err := r.submissionsCollection.Find(ctx, filter, &options.FindOptions{
+		Skip:  func(i int32) *int64 { v := int64(i); return &v }(skip),
+		Limit: func(i int32) *int64 { v := int64(i); return &v }(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	// Placeholder: Fetch submissions from a submissions collection
+	defer cursor.Close(ctx)
+
+	var submissions []model.Submission
+	if err = cursor.All(ctx, &submissions); err != nil {
+		return nil, err
+	}
+
+	pbSubmissions := make([]*pb.Submission, len(submissions))
+	for i, sub := range submissions {
+		pbSubmissions[i] = &pb.Submission{
+			Id:          sub.ID.Hex(),
+			ProblemId:   sub.ProblemID,
+			UserId:      sub.UserID,
+			ChallengeId: *sub.ChallengeID,
+			SubmittedAt: &pb.Timestamp{
+				Seconds: sub.SubmittedAt.Unix(),
+				Nanos:   int32(sub.SubmittedAt.Nanosecond()),
+			},
+			Score:         int32(sub.Score),
+			Status:        sub.Status,
+			Output:        sub.Output,
+			Language:      sub.Language,
+			ExecutionTime: float32(sub.ExecutionTime),
+			Difficulty:    sub.Difficulty,
+			IsFirst:       sub.IsFirst,
+		}
+	}
+
 	return &pb.GetSubmissionsResponse{
-		Submissions: []*pb.Submission{},
+		Submissions: pbSubmissions,
 		Success:     true,
-		Message:     "Submissions retrieved successfully",
+		Message:     "submissions retrieved successfully",
 	}, nil
 }
 
@@ -511,7 +568,7 @@ func (r *Repository) GetProblemByIDSlug(ctx context.Context, req *pb.GetProblemB
 	} else if req.Slug != nil {
 		filter["slug"] = *req.Slug
 	}
-	err := r.collection.FindOne(ctx, filter).Decode(&problem)
+	err := r.problemsCollection.FindOne(ctx, filter).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
 		return &pb.GetProblemByIdSlugResponse{Message: "Problem not found"}, nil
 	}
@@ -539,7 +596,7 @@ func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemB
 		}
 	}
 	opts := options.Find().SetSkip(int64(req.Page-1) * int64(req.PageSize)).SetLimit(int64(req.PageSize))
-	cursor, err := r.collection.Find(ctx, filter, opts)
+	cursor, err := r.problemsCollection.Find(ctx, filter, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -558,9 +615,9 @@ func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemB
 	return resp, nil
 }
 
-func (r *Repository) createIndividualSubmissionRecord(userId, problemId string, success bool, state string) {
+// func (r *Repository) createIndividualSubmissionRecord(userId, problemId string, success bool, state string) {
 
-}
+// }
 
 func (r *Repository) toProblem(p model.Problem) *pb.Problem {
 	var deletedAt *pb.Timestamp
@@ -661,4 +718,58 @@ func (r *Repository) toPBTestCases(tcs []model.TestCase) []*pb.TestCase {
 		}
 	}
 	return result
+}
+
+// func (r *Repository)GetSubmissions()[]
+
+//	func convertTimestampToTime(pbTimestamp *pb.Timestamp) time.Time {
+//		if pbTimestamp == nil {
+//			return time.Time{}
+//		}
+//		return time.Unix(pbTimestamp.Seconds, int64(pbTimestamp.Nanos))
+//	}
+func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.Submission, status string) error {
+	if r == nil || submission == nil {
+		return fmt.Errorf("repository or submission is nil")
+	}
+
+	// check and insert into submission leaderboard entry if first successful submission
+	if status == "SUCCESS" {
+		if submission.ProblemID != "" {
+			count, err := r.submissionsCollection.CountDocuments(ctx, bson.M{
+				"problemId": submission.ProblemID,
+				"status":    "SUCCESS",
+			})
+			fmt.Println("count is ", count)
+			if err != nil {
+				return fmt.Errorf("failed to count successful submissions: %w", err)
+			}
+			if count == 0 {
+				leaderboardEntry := model.ProblemDone{
+					ID:          primitive.NewObjectID(),
+					ProblemID:   submission.ProblemID,
+					UserID:      submission.UserID,
+					SubmittedAt: submission.SubmittedAt,
+					Score:       submission.Score,
+				}
+
+				submission.IsFirst = true
+				_, err = r.submissionFirstSuccessCollection.InsertOne(ctx, leaderboardEntry)
+				if err != nil {
+					fmt.Println("submission add error ", err)
+				}
+				fmt.Println("submission first added")
+			}
+		}
+	}
+
+	// insert into submissions collection (all history)
+	_, err := r.submissionsCollection.InsertOne(ctx, submission)
+	if err != nil {
+		return fmt.Errorf("failed to insert into submissions: %w", err)
+	}
+
+	fmt.Println("submission added")
+
+	return nil
 }

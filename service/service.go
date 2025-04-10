@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -64,7 +63,9 @@ func (s *ProblemService) GetProblem(ctx context.Context, req *pb.GetProblemReque
 	if req.ProblemId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.GetProblem(ctx, req)
+	problemRepoModel, err := s.RepoConnInstance.GetProblem(ctx, req)
+	problemPB := repository.ToProblemResponse(*problemRepoModel)
+	return problemPB, err
 }
 
 func (s *ProblemService) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
@@ -142,45 +143,102 @@ func (s *ProblemService) GetLanguageSupports(ctx context.Context, req *pb.GetLan
 //Error:   &model.ErrorInfo{ErrorType: resp.ErrorType, Code: http.StatusBadRequest, Message: resp.Message, Details: grpcStatus.Message()},
 
 func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.FullValidationByProblemIDRequest) (*pb.FullValidationByProblemIDResponse, error) {
-
+	// Validate required field
 	if req.ProblemId == "" {
 		return &pb.FullValidationByProblemIDResponse{
 			Success:   false,
 			Message:   "Problem ID is required",
 			ErrorType: "VALIDATION_ERROR",
 		}, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
-
 	}
 
+	// Perform initial validation
 	data, problem, err := s.RepoConnInstance.BasicValidationByProblemID(ctx, req)
-	// fmt.Println(data, err)
-	if !data.Success {
-		return data, s.createGrpcError(codes.Unimplemented, data.Message, data.ErrorType, err)
+	if err != nil || !data.Success {
+		errMsg := data.Message
+		if errMsg == "" {
+			errMsg = "Basic validation failed"
+		}
+		s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
+		return data, s.createGrpcError(codes.Unimplemented, errMsg, data.ErrorType, err)
 	}
 
-	for _, v := range problem.SupportedLanguages {
-		res, _ := s.RunUserCodeProblem(ctx, &pb.RunProblemRequest{
+	// Validate each supported language
+	for _, lang := range problem.SupportedLanguages {
+		// Ensure validate code exists for the language
+		validateCode, ok := problem.ValidateCode[lang]
+		if !ok {
+			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
+			return &pb.FullValidationByProblemIDResponse{
+				Success:   false,
+				Message:   fmt.Sprintf("No validation code found for language: %s", lang),
+				ErrorType: "CONFIGURATION_ERROR",
+			}, s.createGrpcError(codes.InvalidArgument, "Missing validation code", "CONFIGURATION_ERROR", nil)
+		}
+
+		// Run validation for the language
+		res, err := s.RunUserCodeProblem(ctx, &pb.RunProblemRequest{
 			ProblemId:     req.ProblemId,
-			UserCode:      problem.ValidateCode[v].Code,
-			Language:      v,
+			UserCode:      validateCode.Code,
+			Language:      lang,
 			IsRunTestcase: false,
 		})
-		if !res.Success {
-			return data, s.createGrpcError(codes.Unimplemented, res.Message, res.ErrorType, errors.New(res.Message))
+		if err != nil {
+			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
+			return &pb.FullValidationByProblemIDResponse{
+				Success:   false,
+				Message:   fmt.Sprintf("Execution failed for language %s: %v", lang, err),
+				ErrorType: "EXECUTION_ERROR",
+			}, s.createGrpcError(codes.Internal, "Execution error", "EXECUTION_ERROR", err)
+		}
+
+		var result map[string]interface{}
+		if err := json.Unmarshal([]byte(res.Message), &result); err != nil {
+			return nil, fmt.Errorf("failed to parse execution result: %w", err)
+		}
+
+		fmt.Println("result ", result)
+
+		// Safely handle the result output
+		overallPass, ok := result["overallPass"].(bool)
+		fmt.Println("overallPass ", overallPass)
+		if !ok {
+			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
+			return &pb.FullValidationByProblemIDResponse{
+				Success:   false,
+				Message:   fmt.Sprintf("No output received for language %s", lang),
+				ErrorType: "EXECUTION_ERROR",
+			}, s.createGrpcError(codes.Internal, "Invalid execution result "+fmt.Sprintf("No output received for language %s", lang), "EXECUTION_ERROR", nil)
+		}
+
+		// Check validation result based on overallPass
+		if !overallPass {
+			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
+			return &pb.FullValidationByProblemIDResponse{
+				Success:   false,
+				Message:   fmt.Sprintf("Validation failed for language %s", lang),
+				ErrorType: "VALIDATION_FAILED",
+			}, s.createGrpcError(codes.FailedPrecondition, "Validation failed", "VALIDATION_FAILED", nil)
 		}
 	}
 
-	fmt.Println(req.ProblemId)
+	// Toggle validation status
+	fmt.Println(req.ProblemId) // Consider replacing with structured logging
 	status := s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, true)
-	message := "Full Valdation Successfull"
+	message := "Full Validation Successful"
 	if !status {
-		message = "Full Validaition is Done, but failed to toggle status"
+		s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
+		message = "Full Validation completed, but failed to toggle status"
 	}
-	return &pb.FullValidationByProblemIDResponse{Success: status, Message: message, ErrorType: ""}, nil
+	return &pb.FullValidationByProblemIDResponse{
+		Success:   status,
+		Message:   message,
+		ErrorType: "",
+	}, nil
 }
 
-func (s *ProblemService) GetSubmissions(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
-	if *req.ProblemId == "" || req.UserId == "" {
+func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
+	if *req.ProblemId == "" && req.UserId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID and user ID are required", "VALIDATION_ERROR", nil)
 	}
 	return s.RepoConnInstance.GetSubmissionsByOptionalProblemID(ctx, req)
@@ -207,16 +265,14 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	//fetch the problem details
 	problem, err := s.RepoConnInstance.GetProblem(ctx, &pb.GetProblemRequest{ProblemId: req.ProblemId})
 	if err != nil {
-		//go s.processSubmission(ctx, req, nil, err, model.ExecutionResult{})
 		return nil, fmt.Errorf("problem not found: %w", err)
 	}
 
 	submitCase := !req.IsRunTestcase
 
 	// Validate the requested language
-	validateCode, ok := problem.Problem.ValidateCode[req.Language]
+	validateCode, ok := problem.ValidateCode[req.Language]
 	if !ok {
-		//go s.processSubmission(ctx, req, nil, err, model.ExecutionResult{})
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "INVALID_LANGUAGE",
@@ -230,20 +286,20 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	// Prepare test cases
 	var testCases []model.TestCase
 	if req.IsRunTestcase {
-		for _, tc := range problem.Problem.Testcases.Run {
-			if tc.Id != "" {
+		for _, tc := range problem.TestCases.Run {
+			if tc.ID != "" {
 				testCases = append(testCases, model.TestCase{
-					ID:       tc.Id,
+					ID:       tc.ID,
 					Input:    tc.Input,
 					Expected: tc.Expected,
 				})
 			}
 		}
 	} else {
-		for _, tc := range append(problem.Problem.Testcases.Run, problem.Problem.Testcases.Submit...) {
-			if tc.Id != "" {
+		for _, tc := range append(problem.TestCases.Run, problem.TestCases.Submit...) {
+			if tc.ID != "" {
 				testCases = append(testCases, model.TestCase{
-					ID:       tc.Id,
+					ID:       tc.ID,
 					Input:    tc.Input,
 					Expected: tc.Expected,
 				})
@@ -254,8 +310,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	// Marshal test cases to JSON
 	testCasesJSON, err := json.Marshal(testCases)
 	if err != nil {
-		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
-
 		return nil, fmt.Errorf("failed to marshal test cases: %w", err)
 	}
 
@@ -277,16 +331,12 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 	compilerRequestBytes, err := json.Marshal(compilerRequest)
 	if err != nil {
-		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
-
 		return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
 	}
 
 	// Send the request to the NATS client
-	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 15*time.Second)
+	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 3*time.Second)
 	if err != nil {
-		go s.processSubmission(ctx, req, nil, err, "FAILED",submitCase)
-
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "COMPILATION_ERROR",
@@ -297,19 +347,39 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
+	// map[execution_time:1.230549718s output:{
+	// 	"totalTestCases": 32,
+	// 	"passedTestCases": 0,
+	// 	"failedTestCases": 32,
+	// 	"failedTestCase": {
+	// 		"testCaseIndex": 0,
+	// 		"input": {
+	// 			"nums": [
+	// 				1,
+	// 				2,
+	// 				3,
+	// 				1
+	// 			]
+	// 		},
+	// 		"expected": true,
+	// 		"received": false,
+	// 		"passed": false
+	// 	},
+	// 	"overallPass": false
+	// }
+
 	// Parse the response
+	// fmt.Println("msg data ",msg.Data)
+
 	var result map[string]interface{}
 	if err := json.Unmarshal(msg.Data, &result); err != nil {
-		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
-
 		return nil, fmt.Errorf("failed to parse execution result: %w", err)
 	}
 
 	// Extract the output
-	output, ok := result["output"].(string)
-	if !ok {
-		go s.processSubmission(ctx, req, nil, err, "FAILED",submitCase)
-
+	output, ok1 := result["output"].(string)
+	// executionTime,ok2 := result["execution_time"].(string)
+	if !ok1 {
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "EXECUTION_ERROR",
@@ -322,7 +392,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 	// Check for compilation errors
 	if strings.Contains(output, "syntax error") || strings.Contains(output, "# command-line-arguments") {
-		go s.processSubmission(ctx, req, nil, err, "FAILED", submitCase)
+		go s.processSubmission(ctx, req, "FAILED", submitCase, *problem, req.UserCode)
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "COMPILATION_ERROR",
@@ -334,18 +404,18 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 
 	// Final step: Unmarshal output to ExecutionResult
-	var executionResult model.ExecutionResult
-	if err := json.Unmarshal([]byte(output), &executionResult); err != nil {
-		executionResult = model.ExecutionResult{OverallPass: false}
+	var executionStatsResult model.ExecutionStatsResult
+	if err := json.Unmarshal([]byte(output), &executionStatsResult); err != nil {
+		executionStatsResult = model.ExecutionStatsResult{OverallPass: false}
 	}
 
-	fmt.Println(executionResult)
+	fmt.Println(executionStatsResult)
 	status := "FAILED"
-	if executionResult.OverallPass {
+	if executionStatsResult.OverallPass {
 		status = "SUCCESS"
 	}
 
-	s.processSubmission(ctx, req, nil, nil, status, submitCase)
+	s.processSubmission(ctx, req, status, submitCase, *problem, req.UserCode)
 
 	return &pb.RunProblemResponse{
 		Success:       true,
@@ -358,27 +428,44 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 //USERID,score,output, execution_time,difficulty, isFirst
 
-func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProblemRequest, resp *pb.RunProblemResponse, err error, status string, submitCase bool) {
-	if !submitCase {
+func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProblemRequest, status string, submitCasePass bool, problem model.Problem, userCode string) {
+	if !submitCasePass || req.UserId == "" {
 		return
 	}
+
+	// type Submission struct {
+	// 	ID            primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	// 	UserID        string             `bson:"userId" json:"userId"`
+	// 	ProblemID     string             `bson:"problemId" json:"problemId"`
+	// 	ChallengeID   *string            `bson:"challengeid,omitempty" json:"challengeId,omitempty"`
+	// 	Title         string             `bson:"title"  json:"title"`
+	// 	SubmittedAt   time.Time          `bson:"submittedAt" json:"submittedAt"`
+	// 	Status        string             `bson:"status" json:"status"`
+	// 	Score         int                `bson:"score" json:"score"`
+	// 	Language      string             `json:"language" bson:"language"`
+	// 	Output        string             `json:"output,omitempty" bson:"output"`
+	// 	ExecutionTime float64            `json:"executionTime,omitempty" bson:"execution_time"`
+	// 	Difficulty    string             `json:"difficulty" bson:"difficulty"`
+	// 	IsFirst       bool               `bson:"isFirst" json:"isFirst"`
+	// }
+
 	var submission model.Submission
 	if req != nil {
 		submission = model.Submission{
 			ID:            primitive.NewObjectID(),
 			UserID:        req.UserId,
 			ProblemID:     req.ProblemId,
-			ChallengeID:   nil,
+			ChallengeID:   nil, // for now.
+			Title:         problem.Title,
 			SubmittedAt:   time.Now(),
+			UserCode:      userCode,
 			Score:         0,
 			Language:      req.Language,
+			Status:        status,
 			ExecutionTime: 0,
-			Difficulty:    "",
+			Difficulty:    problem.Difficulty,
 		}
 	}
-
-	// Update based on execution result
-	submission.Status = status
 
 	s.RepoConnInstance.PushSubmissionData(ctx, &submission, status)
 }
@@ -399,3 +486,31 @@ func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProbl
 // 		expected:[0,1]
 // 	}
 // ]
+
+// func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
+
+
+func (s *ProblemService) GetProblemsDoneStatistics(ctx context.Context, req *pb.GetProblemsDoneStatisticsRequest) (*pb.GetProblemsDoneStatisticsResponse,error) {
+	data, err := s.RepoConnInstance.ProblemsDoneStatistics(req.UserId)
+	return &pb.GetProblemsDoneStatisticsResponse{
+			Data: &pb.ProblemsDoneStatistics{
+				MaxEasyCount:    data.MaxEasyCount,
+				DoneEasyCount:   data.DoneEasyCount,
+				MaxMediumCount:  data.MaxMediumCount,
+				DoneMediumCount: data.DoneMediumCount,
+				MaxHardCount:    data.MaxHardCount,
+				DoneHardCount:   data.DoneHardCount,
+			},
+	},err
+}
+
+func MapProblemStatistics(input model.ProblemsDoneStatistics) pb.ProblemsDoneStatistics {
+	return pb.ProblemsDoneStatistics{
+			MaxEasyCount:    input.MaxEasyCount,
+			DoneEasyCount:   input.DoneEasyCount,
+			MaxMediumCount:  input.MaxMediumCount,
+			DoneMediumCount: input.DoneMediumCount,
+			MaxHardCount:    input.MaxHardCount,
+			DoneHardCount:   input.DoneHardCount,
+	}
+}

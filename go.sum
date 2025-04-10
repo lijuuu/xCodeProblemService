@@ -32,6 +32,14 @@ github.com/lijuuu/GlobalProtoXcode v0.0.0-20250409045526-aa024a92ee57 h1:cNxfrw4
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250409045526-aa024a92ee57/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250409045654-dec3d33612c7 h1:oMOYCE3K9IWxM9S8LckY1L39cpuw2K9MFrbjYsxMpoo=
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250409045654-dec3d33612c7/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410044125-0f2ca7396958 h1:7yaqXwlK1Iep1sC2hhM9MltdixedHplB+MVoPryiLjQ=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410044125-0f2ca7396958/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410050025-52606d80a05a h1:YOM1Tag3ewtFkRoEyaQ+IvQqWpe+TlF7//KdXVGwfk0=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410050025-52606d80a05a/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410125041-8f4401942471 h1:2dk5+j4Snfs31hCN7p6dplzO8F2cHx2fO60itqrj6/c=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410125041-8f4401942471/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410125538-928ec00dd146 h1:ixJSr9LEzonXz6OcwBrGujTqenUIot/jv1LRF+xqfmQ=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250410125538-928ec00dd146/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
 github.com/montanaflynn/stats v0.7.1 h1:etflOAAHORrCC44V+aR6Ftzort912ZU+YLiSTuV8eaE=
 github.com/montanaflynn/stats v0.7.1/go.mod h1:etXPPgVO6n31NxCd9KQUMvCM+ve0ruNzt6R8Bnaayow=
 github.com/nats-io/nats.go v1.39.1 h1:oTkfKBmz7W047vRxV762M67ZdXeOtUgvbBaNoQ+3PPk=

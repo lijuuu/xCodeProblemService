@@ -135,20 +135,20 @@ func (r *Repository) DeleteProblem(ctx context.Context, req *pb.DeleteProblemReq
 	return &pb.DeleteProblemResponse{Success: true, Message: "Problem marked as deleted"}, nil
 }
 
-func (r *Repository) GetProblem(ctx context.Context, req *pb.GetProblemRequest) (*pb.GetProblemResponse, error) {
+func (r *Repository) GetProblem(ctx context.Context, req *pb.GetProblemRequest) (*model.Problem, error) {
 	id, err := primitive.ObjectIDFromHex(req.ProblemId)
 	if err != nil {
-		return nil, err
+		return &model.Problem{}, err
 	}
 	var problem model.Problem
 	err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
 	if err == mongo.ErrNoDocuments {
-		return &pb.GetProblemResponse{}, nil
+		return &model.Problem{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return r.toProblemResponse(problem), nil
+	return &problem, nil
 }
 
 func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
@@ -186,7 +186,7 @@ func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsReque
 		PageSize:   req.PageSize,
 	}
 	for i, p := range problems {
-		resp.Problems[i] = r.toProblem(p)
+		resp.Problems[i] = ToProblem(p)
 	}
 	return resp, nil
 }
@@ -218,8 +218,8 @@ func (r *Repository) AddTestCases(ctx context.Context, req *pb.AddTestCasesReque
 	for _, tc := range problem.TestCases.Submit {
 		existingSubmitIDs[tc.ID] = true
 	}
-	newRun := r.toTestCases(req.Testcases.Run, existingRunIDs, true)
-	newSubmit := r.toTestCases(req.Testcases.Submit, existingSubmitIDs, false)
+	newRun := toTestCases(req.Testcases.Run, existingRunIDs, true)
+	newSubmit := toTestCases(req.Testcases.Submit, existingSubmitIDs, false)
 	update := bson.M{
 		"$push": bson.M{
 			"testcases.run":    bson.M{"$each": newRun},
@@ -485,74 +485,87 @@ func (r *Repository) ToggleProblemValidaition(ctx context.Context, problemID str
 
 func (r *Repository) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
 	var filter bson.M
-	if req.ProblemId != nil {
-		id, err := primitive.ObjectIDFromHex(*req.ProblemId)
-		if err != nil {
-			return &pb.GetSubmissionsResponse{Success: false, Message: "invalid problem id", ErrorType: "INVALID_ID"}, nil
-		}
-		var problem struct{}
-		err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
-		if err != nil {
-			return &pb.GetSubmissionsResponse{Success: false, Submissions: []*pb.Submission{}, Message: "problem not found", ErrorType: "NOT_FOUND"}, nil
-		}
-		filter = bson.M{"problemId": *req.ProblemId}
+	if req.ProblemId != nil && *req.ProblemId != "" {
+			fmt.Println(req)
+			id, err := primitive.ObjectIDFromHex(*req.ProblemId)
+			if err != nil {
+					return &pb.GetSubmissionsResponse{Success: false, Message: "invalid problem id: " + err.Error(), ErrorType: "INVALID_ID"}, nil
+			}
+			var problem struct{}
+			err = r.problemsCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&problem)
+			if err != nil {
+					return &pb.GetSubmissionsResponse{Success: false, Submissions: []*pb.Submission{}, Message: "problem not found", ErrorType: "NOT_FOUND"}, nil
+			}
+			filter = bson.M{"problemId": *req.ProblemId}
 	} else {
-		filter = bson.M{}
+			filter = bson.M{}
 	}
 
 	if req.UserId != "" {
-		filter["userId"] = req.UserId
+			filter["userId"] = req.UserId
 	}
 
 	limit := req.Limit
 	if limit == 0 {
-		limit = 10
+			limit = 10
 	}
 	page := req.Page
 	if page == 0 {
-		page = 1
+			page = 1
 	}
 	skip := (page - 1) * limit
 
 	cursor, err := r.submissionsCollection.Find(ctx, filter, &options.FindOptions{
-		Skip:  func(i int32) *int64 { v := int64(i); return &v }(skip),
-		Limit: func(i int32) *int64 { v := int64(i); return &v }(limit),
+			Skip:  func(i int32) *int64 { v := int64(i); return &v }(skip),
+			Limit: func(i int32) *int64 { v := int64(i); return &v }(limit),
 	})
 	if err != nil {
-		return nil, err
+			fmt.Println("error finding submissions:", err)
+			return &pb.GetSubmissionsResponse{Success: false, Message: "failed to retrieve submissions", ErrorType: "DB_ERROR"}, nil
 	}
-	defer cursor.Close(ctx)
+	defer func() {
+			if err := cursor.Close(ctx); err != nil {
+					fmt.Println("error closing cursor:", err)
+			}
+	}()
 
 	var submissions []model.Submission
 	if err = cursor.All(ctx, &submissions); err != nil {
-		return nil, err
+			fmt.Println("error decoding submissions:", err)
+			return &pb.GetSubmissionsResponse{Success: false, Message: "failed to decode submissions", ErrorType: "DB_ERROR"}, nil
 	}
 
 	pbSubmissions := make([]*pb.Submission, len(submissions))
 	for i, sub := range submissions {
-		pbSubmissions[i] = &pb.Submission{
-			Id:          sub.ID.Hex(),
-			ProblemId:   sub.ProblemID,
-			UserId:      sub.UserID,
-			ChallengeId: *sub.ChallengeID,
-			SubmittedAt: &pb.Timestamp{
-				Seconds: sub.SubmittedAt.Unix(),
-				Nanos:   int32(sub.SubmittedAt.Nanosecond()),
-			},
-			Score:         int32(sub.Score),
-			Status:        sub.Status,
-			Output:        sub.Output,
-			Language:      sub.Language,
-			ExecutionTime: float32(sub.ExecutionTime),
-			Difficulty:    sub.Difficulty,
-			IsFirst:       sub.IsFirst,
-		}
+			var challengeID string
+			if sub.ChallengeID != nil {
+					challengeID = *sub.ChallengeID
+			}
+			pbSubmissions[i] = &pb.Submission{
+					Id:          sub.ID.Hex(),
+					ProblemId:   sub.ProblemID,
+					Title:       sub.Title,
+					UserId:      sub.UserID,
+					ChallengeId: challengeID,
+					SubmittedAt: &pb.Timestamp{
+							Seconds: sub.SubmittedAt.Unix(),
+							Nanos:   int32(sub.SubmittedAt.Nanosecond()),
+					},
+					Score:         int32(sub.Score),
+					Status:        sub.Status,
+					Output:        sub.Output,
+					Language:      sub.Language,
+					ExecutionTime: float32(sub.ExecutionTime),
+					Difficulty:    sub.Difficulty,
+					IsFirst:       sub.IsFirst,
+			}
 	}
 
+
 	return &pb.GetSubmissionsResponse{
-		Submissions: pbSubmissions,
-		Success:     true,
-		Message:     "submissions retrieved successfully",
+			Submissions: pbSubmissions,
+			Success:     true,
+			Message:     "submissions retrieved successfully",
 	}, nil
 }
 
@@ -576,7 +589,7 @@ func (r *Repository) GetProblemByIDSlug(ctx context.Context, req *pb.GetProblemB
 		return nil, err
 	}
 	return &pb.GetProblemByIdSlugResponse{
-		Problemmetdata: r.toProblemMetadataLite(problem),
+		Problemmetdata: ToProblemMetadataLite(problem),
 		Message:        "Problem retrieved successfully",
 	}, nil
 }
@@ -610,7 +623,7 @@ func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemB
 		Message:        "Problems retrieved successfully",
 	}
 	for i, p := range problems {
-		resp.Problemmetdata[i] = r.toProblemMetadataLite(p)
+		resp.Problemmetdata[i] = ToProblemMetadataLite(p)
 	}
 	return resp, nil
 }
@@ -619,7 +632,7 @@ func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemB
 
 // }
 
-func (r *Repository) toProblem(p model.Problem) *pb.Problem {
+func ToProblem(p model.Problem) *pb.Problem {
 	var deletedAt *pb.Timestamp
 	if p.DeletedAt != nil {
 		deletedAt = &pb.Timestamp{Seconds: p.DeletedAt.Unix()}
@@ -645,7 +658,7 @@ func (r *Repository) toProblem(p model.Problem) *pb.Problem {
 		Title:              p.Title,
 		Description:        p.Description,
 		Tags:               p.Tags,
-		Testcases:          &pb.TestCases{Run: r.toPBTestCases(p.TestCases.Run), Submit: r.toPBTestCases(p.TestCases.Submit)},
+		Testcases:          &pb.TestCases{Run: ToPBTestCases(p.TestCases.Run), Submit: ToPBTestCases(p.TestCases.Submit)},
 		Difficulty:         p.Difficulty,
 		SupportedLanguages: p.SupportedLanguages,
 		ValidateCode:       validateCode,
@@ -654,20 +667,20 @@ func (r *Repository) toProblem(p model.Problem) *pb.Problem {
 	}
 }
 
-func (r *Repository) toProblemMetadata(p model.Problem) *pb.ProblemMetadata {
+func ToProblemMetadata(p model.Problem) *pb.ProblemMetadata {
 	return &pb.ProblemMetadata{
 		ProblemId:          p.ID.Hex(),
 		Title:              p.Title,
 		Description:        p.Description,
 		Tags:               p.Tags,
-		TestcaseRun:        &pb.TestCaseRunOnly{Run: r.toPBTestCases(p.TestCases.Run)},
+		TestcaseRun:        &pb.TestCaseRunOnly{Run: ToPBTestCases(p.TestCases.Run)},
 		Difficulty:         p.Difficulty,
 		SupportedLanguages: p.SupportedLanguages,
 		Validated:          p.Validated,
 	}
 }
 
-func (r *Repository) toProblemMetadataLite(p model.Problem) *pb.ProblemMetadataLite {
+func ToProblemMetadataLite(p model.Problem) *pb.ProblemMetadataLite {
 	placeholderMaps := make(map[string]string)
 	for lang, vc := range p.ValidateCode {
 		placeholderMaps[lang] = vc.Placeholder
@@ -677,7 +690,7 @@ func (r *Repository) toProblemMetadataLite(p model.Problem) *pb.ProblemMetadataL
 		Title:              p.Title,
 		Description:        p.Description,
 		Tags:               p.Tags,
-		TestcaseRun:        &pb.TestCaseRunOnly{Run: r.toPBTestCases(p.TestCases.Run)},
+		TestcaseRun:        &pb.TestCaseRunOnly{Run: ToPBTestCases(p.TestCases.Run)},
 		Difficulty:         p.Difficulty,
 		SupportedLanguages: p.SupportedLanguages,
 		Validated:          p.Validated,
@@ -685,11 +698,11 @@ func (r *Repository) toProblemMetadataLite(p model.Problem) *pb.ProblemMetadataL
 	}
 }
 
-func (r *Repository) toProblemResponse(p model.Problem) *pb.GetProblemResponse {
-	return &pb.GetProblemResponse{Problem: r.toProblem(p)}
+func ToProblemResponse(p model.Problem) *pb.GetProblemResponse {
+	return &pb.GetProblemResponse{Problem: ToProblem(p)}
 }
 
-func (r *Repository) toTestCases(tcs []*pb.TestCase, existingIDs map[string]bool, isRun bool) []model.TestCase {
+func toTestCases(tcs []*pb.TestCase, existingIDs map[string]bool, isRun bool) []model.TestCase {
 	result := make([]model.TestCase, 0, len(tcs))
 	for _, tc := range tcs {
 		id := tc.Id
@@ -708,7 +721,7 @@ func (r *Repository) toTestCases(tcs []*pb.TestCase, existingIDs map[string]bool
 	return result
 }
 
-func (r *Repository) toPBTestCases(tcs []model.TestCase) []*pb.TestCase {
+func ToPBTestCases(tcs []model.TestCase) []*pb.TestCase {
 	result := make([]*pb.TestCase, len(tcs))
 	for i, tc := range tcs {
 		result[i] = &pb.TestCase{
@@ -728,29 +741,57 @@ func (r *Repository) toPBTestCases(tcs []model.TestCase) []*pb.TestCase {
 //		}
 //		return time.Unix(pbTimestamp.Seconds, int64(pbTimestamp.Nanos))
 //	}
-func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.Submission, status string) error {
+func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.Submission, status string) {
 	if r == nil || submission == nil {
-		return fmt.Errorf("repository or submission is nil")
+		fmt.Println("repository or submission is nil")
+		return
 	}
+
+	SuccessCount, err := r.submissionsCollection.CountDocuments(ctx, bson.M{
+		"problemId": submission.ProblemID,
+		"status":    "SUCCESS",
+	})
+	if err != nil {
+		fmt.Println("failed to count successful submissions: %w", err)
+	}
+
+	// insert into submissions collection (all history)
+	if SuccessCount == 0 && status == "SUCCESS"{
+		submission.Score = CalculateScore(submission.Difficulty)
+		submission.IsFirst =true
+	}
+	submissionObject, err := r.submissionsCollection.InsertOne(ctx, submission)
+	if err != nil {
+		fmt.Println("failed to insert into submissions:", err)
+		return
+	}
+
+	// type assert InsertedID to primitive.ObjectID and convert to string
+	submissionID, ok := submissionObject.InsertedID.(primitive.ObjectID)
+	if !ok {
+		fmt.Println("failed to assert submission ID to ObjectID")
+		return
+	}
+
+	submissionIDHex := submissionID.Hex()
+	fmt.Println("submission added:", submissionObject, "submission ID:", submissionIDHex)
 
 	// check and insert into submission leaderboard entry if first successful submission
 	if status == "SUCCESS" {
 		if submission.ProblemID != "" {
-			count, err := r.submissionsCollection.CountDocuments(ctx, bson.M{
-				"problemId": submission.ProblemID,
-				"status":    "SUCCESS",
-			})
-			fmt.Println("count is ", count)
-			if err != nil {
-				return fmt.Errorf("failed to count successful submissions: %w", err)
-			}
-			if count == 0 {
+			fmt.Println("SuccessCount is ", SuccessCount)
+
+			if SuccessCount == 0 { 
 				leaderboardEntry := model.ProblemDone{
-					ID:          primitive.NewObjectID(),
-					ProblemID:   submission.ProblemID,
-					UserID:      submission.UserID,
-					SubmittedAt: submission.SubmittedAt,
-					Score:       submission.Score,
+					ID:           primitive.NewObjectID(),
+					SubmissionID: submissionIDHex,
+					ProblemID:    submission.ProblemID,
+					UserID:       submission.UserID,
+					Title:        submission.Title,
+					Language:     submission.Language,
+					Difficulty:   submission.Difficulty,
+					SubmittedAt:  submission.SubmittedAt,
+					Score:        CalculateScore(submission.Difficulty),
 				}
 
 				submission.IsFirst = true
@@ -762,14 +803,88 @@ func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.S
 			}
 		}
 	}
+}
 
-	// insert into submissions collection (all history)
-	_, err := r.submissionsCollection.InsertOne(ctx, submission)
-	if err != nil {
-		return fmt.Errorf("failed to insert into submissions: %w", err)
+func CalculateScore(difficulty string) int {
+	score := 2
+
+	switch difficulty {
+	// case "EASY":
+	// 	score = 2
+	case "MEDIUM":
+		score = 4
+	case "HARD":
+		score = 6
 	}
 
-	fmt.Println("submission added")
+	return score
+}
 
-	return nil
+func (r *Repository) ProblemsDoneStatistics(userID string) (model.ProblemsDoneStatistics, error) {
+	if userID == "" {
+			return model.ProblemsDoneStatistics{}, fmt.Errorf("userID cannot be empty")
+	}
+
+	// initialize the statistics structure
+	stats := model.ProblemsDoneStatistics{
+			MaxEasyCount:    0,
+			DoneEasyCount:   0,
+			MaxMediumCount:  0,
+			DoneMediumCount: 0,
+			MaxHardCount:    0,
+			DoneHardCount:   0,
+	}
+
+	// get the total count of problems based on difficulty
+	problemsCursor, err := r.problemsCollection.Find(context.TODO(), bson.M{"deleted_at": nil})
+	if err != nil {
+			fmt.Println("failed to fetch problems:", err)
+			return stats, err
+	}
+	defer problemsCursor.Close(context.TODO())
+
+	for problemsCursor.Next(context.TODO()) {
+			var problem model.Problem
+			if err := problemsCursor.Decode(&problem); err != nil {
+					fmt.Println("failed to decode problem:", err)
+					continue
+			}
+
+			switch problem.Difficulty {
+			case "E":
+					stats.MaxEasyCount++
+			case "M":
+					stats.MaxMediumCount++
+			case "H":
+					stats.MaxHardCount++
+			}
+	}
+
+	// get the count of problems done by the user
+	doneCursor, err := r.submissionFirstSuccessCollection.Find(context.TODO(), bson.M{"userId": userID})
+	if err != nil {
+			fmt.Println("failed to fetch submissions:", err)
+			return stats, err
+	}
+	defer doneCursor.Close(context.TODO())
+
+	for doneCursor.Next(context.TODO()) {
+			var submission model.ProblemDone
+			if err := doneCursor.Decode(&submission); err != nil {
+					fmt.Println("failed to decode submission:", err)
+					continue
+			}
+
+			switch submission.Difficulty {
+			case "E":
+					stats.DoneEasyCount++
+			case "M":
+					stats.DoneMediumCount++
+			case "H":
+					stats.DoneHardCount++
+			}
+	}
+
+	// return the statistics
+	return stats, nil
 }

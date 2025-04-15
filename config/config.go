@@ -13,6 +13,7 @@ type Config struct {
 	MongoDBURL     string
 	ProblemService string
 	NATSURL        string
+	RedisURL       string
 }
 
 func LoadConfig() Config {
@@ -26,6 +27,7 @@ func LoadConfig() Config {
 		MongoDBURL:     getEnv("MONGODBURL", "mongodb://localhost:27017"),
 		ProblemService: getEnv("PROBLEMSERVICE", "50055"),
 		NATSURL:        getEnv("NATSURL", "nats://localhost:4222"),
+		RedisURL:       getEnv("REDISURL", "localhost:6379"),
 	}
 
 	// fmt.Println(config)

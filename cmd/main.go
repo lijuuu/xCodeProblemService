@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net"
+	"xcode/cache"
 	configs "xcode/config"
 	"xcode/mongoconn"
 	"xcode/natsclient"
@@ -21,13 +22,15 @@ func main() {
 		log.Fatalf("Failed to create NATS client: %v", err)
 	}
 
+	configValues:= configs.LoadConfig()
+
+	redisCacheClient := cache.NewRedisCache(configValues.RedisURL, "", 0)
+
 	mongoclientInstance := mongoconn.ConnectDB()
 
 	repoInstance := repository.NewRepository(mongoclientInstance)
 
-	serviceInstance := service.NewService(repoInstance,natsClient)
-
-	configValues := configs.LoadConfig()
+	serviceInstance := service.NewService(repoInstance, natsClient,*redisCacheClient)
 
 	// Start gRPC server
 	lis, err := net.Listen("tcp", ":"+configValues.ProblemService)

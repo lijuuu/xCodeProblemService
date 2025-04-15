@@ -45,6 +45,7 @@ type ProblemDone struct {
 	Language     string             `bson:"language" json:"language"`
 	Difficulty   string             `bson:"difficulty" json:"difficulty"`
 	SubmittedAt  time.Time          `bson:"submittedAt" json:"submittedAt"`
+	Country      string             `bson:"country"`
 	Score        int                `json:"score" bson:"score"`
 }
 
@@ -137,9 +138,9 @@ type GetLeaderBoardOptionalCountryResponse struct {
 }
 
 type LeaderboardSingle struct {
-	Username    string  `json:"username" bson:"username"`
-	CountryRank *int64  `json:"countryRank,omitempty" bson:"countryRank,omitempty"`
-	GlobalRank  int64   `json:"globalRank" bson:"globalRank"`
+	Username    string `json:"username" bson:"username"`
+	CountryRank *int64 `json:"countryRank,omitempty" bson:"countryRank,omitempty"`
+	GlobalRank  int64  `json:"globalRank" bson:"globalRank"`
 }
 
 type GetLeaderBoardOptionalCountryRequest struct {

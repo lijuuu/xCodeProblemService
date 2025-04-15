@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"xcode/cache"
 	"xcode/model"
 	"xcode/natsclient"
 	"xcode/repository"
@@ -16,20 +18,25 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// problemservice handles problem-related operations
 type ProblemService struct {
 	RepoConnInstance repository.Repository
 	NatsClient       *natsclient.NatsClient
+	RedisCacheClient cache.RedisCache
 	pb.UnimplementedProblemsServiceServer
 }
 
-func NewService(repo *repository.Repository, natsClient *natsclient.NatsClient) *ProblemService {
-	return &ProblemService{RepoConnInstance: *repo, NatsClient: natsClient}
+// newservice initializes a new problemservice
+func NewService(repo *repository.Repository, natsClient *natsclient.NatsClient, RedisCacheClient cache.RedisCache) *ProblemService {
+	return &ProblemService{RepoConnInstance: *repo, NatsClient: natsClient, RedisCacheClient: RedisCacheClient}
 }
 
+// getservice returns the problemservice instance
 func (s *ProblemService) GetService() *ProblemService {
 	return s
 }
 
+// creategrpcerror constructs a grpc error
 func (s *ProblemService) createGrpcError(code codes.Code, message string, errorType string, cause error) error {
 	details := message
 	if cause != nil {
@@ -38,36 +45,77 @@ func (s *ProblemService) createGrpcError(code codes.Code, message string, errorT
 	return status.Error(code, fmt.Sprintf("ErrorType: %s, Code: %d, Details: %s", errorType, code, details))
 }
 
+// createproblem creates a new problem
 func (s *ProblemService) CreateProblem(ctx context.Context, req *pb.CreateProblemRequest) (*pb.CreateProblemResponse, error) {
 	if req.Title == "" || req.Description == "" || req.Difficulty == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Title, description, and difficulty are required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.CreateProblem(ctx, req)
+	resp, err := s.RepoConnInstance.CreateProblem(ctx, req)
+	if err == nil {
+		cacheKey := "problems_list:*"
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// updateproblem updates an existing problem
 func (s *ProblemService) UpdateProblem(ctx context.Context, req *pb.UpdateProblemRequest) (*pb.UpdateProblemResponse, error) {
 	if req.ProblemId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.UpdateProblem(ctx, req)
+	resp, err := s.RepoConnInstance.UpdateProblem(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = fmt.Sprintf("problem_slug:%s", *req.Title)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = "problems_list:*"
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// deleteproblem deletes a problem
 func (s *ProblemService) DeleteProblem(ctx context.Context, req *pb.DeleteProblemRequest) (*pb.DeleteProblemResponse, error) {
 	if req.ProblemId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.DeleteProblem(ctx, req)
+	resp, err := s.RepoConnInstance.DeleteProblem(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = "problems_list:*"
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// getproblem retrieves a problem by id
 func (s *ProblemService) GetProblem(ctx context.Context, req *pb.GetProblemRequest) (*pb.GetProblemResponse, error) {
 	if req.ProblemId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
 	}
+	cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+	cachedProblem, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedProblem != nil {
+		var problem pb.GetProblemResponse
+		if err := json.Unmarshal(cachedProblem.([]byte), &problem); err == nil {
+			return &problem, nil
+		}
+	}
 	problemRepoModel, err := s.RepoConnInstance.GetProblem(ctx, req)
+	if err != nil {
+		return nil, err
+	}
 	problemPB := repository.ToProblemResponse(*problemRepoModel)
-	return problemPB, err
+	problemBytes, _ := json.Marshal(problemPB)
+	if err := s.RedisCacheClient.Set(cacheKey, problemBytes, 1*time.Hour); err != nil {
+		fmt.Printf("failed to cache problem: %v\n", err)
+	}
+	return problemPB, nil
 }
 
+// listproblems retrieves a paginated list of problems
 func (s *ProblemService) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
 	if req.Page < 1 {
 		req.Page = 1
@@ -75,9 +123,26 @@ func (s *ProblemService) ListProblems(ctx context.Context, req *pb.ListProblemsR
 	if req.PageSize < 1 {
 		req.PageSize = 10
 	}
-	return s.RepoConnInstance.ListProblems(ctx, req)
+	cacheKey := fmt.Sprintf("problems_list:%d:%d", req.Page, req.PageSize)
+	cachedProblems, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedProblems != nil {
+		var problems pb.ListProblemsResponse
+		if err := json.Unmarshal(cachedProblems.([]byte), &problems); err == nil {
+			return &problems, nil
+		}
+	}
+	resp, err := s.RepoConnInstance.ListProblems(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	problemsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, problemsBytes, 1*time.Hour); err != nil {
+		fmt.Printf("failed to cache problems list: %v\n", err)
+	}
+	return resp, nil
 }
 
+// addtestcases adds test cases to a problem
 func (s *ProblemService) AddTestCases(ctx context.Context, req *pb.AddTestCasesRequest) (*pb.AddTestCasesResponse, error) {
 	if req.ProblemId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
@@ -85,7 +150,6 @@ func (s *ProblemService) AddTestCases(ctx context.Context, req *pb.AddTestCasesR
 	if len(req.Testcases.Run) == 0 && len(req.Testcases.Submit) == 0 {
 		return nil, s.createGrpcError(codes.InvalidArgument, "At least one test case is required", "VALIDATION_ERROR", nil)
 	}
-	fmt.Println(req.Testcases)
 	for _, tc := range req.Testcases.Run {
 		if tc.Input == "" || tc.Expected == "" {
 			return nil, s.createGrpcError(codes.InvalidArgument, "Test case input and expected output are required", "VALIDATION_ERROR", nil)
@@ -96,9 +160,15 @@ func (s *ProblemService) AddTestCases(ctx context.Context, req *pb.AddTestCasesR
 			return nil, s.createGrpcError(codes.InvalidArgument, "Test case input and expected output are required", "VALIDATION_ERROR", nil)
 		}
 	}
-	return s.RepoConnInstance.AddTestCases(ctx, req)
+	resp, err := s.RepoConnInstance.AddTestCases(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// addlanguagesupport adds language support to a problem
 func (s *ProblemService) AddLanguageSupport(ctx context.Context, req *pb.AddLanguageSupportRequest) (*pb.AddLanguageSupportResponse, error) {
 	if req.ProblemId == "" || req.Language == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID and language are required", "VALIDATION_ERROR", nil)
@@ -106,9 +176,17 @@ func (s *ProblemService) AddLanguageSupport(ctx context.Context, req *pb.AddLang
 	if req.ValidationCode == nil || req.ValidationCode.Code == "" || req.ValidationCode.Template == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Validation code (code and template) is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.AddLanguageSupport(ctx, req)
+	resp, err := s.RepoConnInstance.AddLanguageSupport(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = fmt.Sprintf("language_supports:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// updatelanguagesupport updates language support for a problem
 func (s *ProblemService) UpdateLanguageSupport(ctx context.Context, req *pb.UpdateLanguageSupportRequest) (*pb.UpdateLanguageSupportResponse, error) {
 	if req.ProblemId == "" || req.Language == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID and language are required", "VALIDATION_ERROR", nil)
@@ -116,34 +194,70 @@ func (s *ProblemService) UpdateLanguageSupport(ctx context.Context, req *pb.Upda
 	if req.ValidationCode == nil || req.ValidationCode.Code == "" || req.ValidationCode.Template == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Validation code (code and template) is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.UpdateLanguageSupport(ctx, req)
+	resp, err := s.RepoConnInstance.UpdateLanguageSupport(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = fmt.Sprintf("language_supports:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// removelanguagesupport removes language support from a problem
 func (s *ProblemService) RemoveLanguageSupport(ctx context.Context, req *pb.RemoveLanguageSupportRequest) (*pb.RemoveLanguageSupportResponse, error) {
 	if req.ProblemId == "" || req.Language == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID and language are required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.RemoveLanguageSupport(ctx, req)
+	resp, err := s.RepoConnInstance.RemoveLanguageSupport(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = fmt.Sprintf("language_supports:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// deletetestcase deletes a test case from a problem
 func (s *ProblemService) DeleteTestCase(ctx context.Context, req *pb.DeleteTestCaseRequest) (*pb.DeleteTestCaseResponse, error) {
 	if req.ProblemId == "" || req.TestcaseId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID and testcase ID are required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.DeleteTestCase(ctx, req)
+	resp, err := s.RepoConnInstance.DeleteTestCase(ctx, req)
+	if err == nil {
+		cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+	return resp, err
 }
 
+// getlanguagesupports retrieves supported languages for a problem
 func (s *ProblemService) GetLanguageSupports(ctx context.Context, req *pb.GetLanguageSupportsRequest) (*pb.GetLanguageSupportsResponse, error) {
 	if req.ProblemId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.GetLanguageSupports(ctx, req)
+	cacheKey := fmt.Sprintf("language_supports:%s", req.ProblemId)
+	cachedLangs, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedLangs != nil {
+		var langs pb.GetLanguageSupportsResponse
+		if err := json.Unmarshal(cachedLangs.([]byte), &langs); err == nil {
+			return &langs, nil
+		}
+	}
+	resp, err := s.RepoConnInstance.GetLanguageSupports(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	langsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, langsBytes, 30*time.Minute); err != nil {
+		fmt.Printf("failed to cache language supports: %v\n", err)
+	}
+	return resp, nil
 }
 
-//Error:   &model.ErrorInfo{ErrorType: resp.ErrorType, Code: http.StatusBadRequest, Message: resp.Message, Details: grpcStatus.Message()},
-
+// fullvalidationbyproblemid validates a problem across all supported languages
 func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.FullValidationByProblemIDRequest) (*pb.FullValidationByProblemIDResponse, error) {
-	// Validate required field
 	if req.ProblemId == "" {
 		return &pb.FullValidationByProblemIDResponse{
 			Success:   false,
@@ -152,7 +266,6 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 		}, s.createGrpcError(codes.InvalidArgument, "Problem ID is required", "VALIDATION_ERROR", nil)
 	}
 
-	// Perform initial validation
 	data, problem, err := s.RepoConnInstance.BasicValidationByProblemID(ctx, req)
 	if err != nil || !data.Success {
 		errMsg := data.Message
@@ -163,9 +276,7 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 		return data, s.createGrpcError(codes.Unimplemented, errMsg, data.ErrorType, err)
 	}
 
-	// Validate each supported language
 	for _, lang := range problem.SupportedLanguages {
-		// Ensure validate code exists for the language
 		validateCode, ok := problem.ValidateCode[lang]
 		if !ok {
 			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
@@ -176,7 +287,6 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 			}, s.createGrpcError(codes.InvalidArgument, "Missing validation code", "CONFIGURATION_ERROR", nil)
 		}
 
-		// Run validation for the language
 		res, err := s.RunUserCodeProblem(ctx, &pb.RunProblemRequest{
 			ProblemId:     req.ProblemId,
 			UserCode:      validateCode.Code,
@@ -197,11 +307,7 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 			return nil, fmt.Errorf("failed to parse execution result: %w", err)
 		}
 
-		fmt.Println("result ", result)
-
-		// Safely handle the result output
 		overallPass, ok := result["overallPass"].(bool)
-		fmt.Println("overallPass ", overallPass)
 		if !ok {
 			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
 			return &pb.FullValidationByProblemIDResponse{
@@ -211,7 +317,6 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 			}, s.createGrpcError(codes.Internal, "Invalid execution result "+fmt.Sprintf("No output received for language %s", lang), "EXECUTION_ERROR", nil)
 		}
 
-		// Check validation result based on overallPass
 		if !overallPass {
 			s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
 			return &pb.FullValidationByProblemIDResponse{
@@ -222,14 +327,15 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 		}
 	}
 
-	// Toggle validation status
-	fmt.Println(req.ProblemId) // Consider replacing with structured logging
+	fmt.Println(req.ProblemId)
 	status := s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, true)
 	message := "Full Validation Successful"
 	if !status {
 		s.RepoConnInstance.ToggleProblemValidaition(ctx, req.ProblemId, false)
 		message = "Full Validation completed, but failed to toggle status"
 	}
+	cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+	_ = s.RedisCacheClient.Delete(cacheKey)
 	return &pb.FullValidationByProblemIDResponse{
 		Success:   status,
 		Message:   message,
@@ -237,20 +343,58 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 	}, nil
 }
 
+// getsubmissionsbyoptionalproblemid retrieves submissions
 func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
 	if *req.ProblemId == "" && req.UserId == "" {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID and user ID are required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.GetSubmissionsByOptionalProblemID(ctx, req)
+	cacheKey := fmt.Sprintf("submissions:%s:%s", *req.ProblemId, req.UserId)
+	cachedSubmissions, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedSubmissions != nil {
+		var submissions pb.GetSubmissionsResponse
+		if err := json.Unmarshal(cachedSubmissions.([]byte), &submissions); err == nil {
+			return &submissions, nil
+		}
+	}
+	resp, err := s.RepoConnInstance.GetSubmissionsByOptionalProblemID(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	submissionsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 30*time.Minute); err != nil {
+		fmt.Printf("failed to cache submissions: %v\n", err)
+	}
+	return resp, nil
 }
 
+// getproblembyidslug retrieves a problem by id or slug
 func (s *ProblemService) GetProblemByIDSlug(ctx context.Context, req *pb.GetProblemByIdSlugRequest) (*pb.GetProblemByIdSlugResponse, error) {
 	if req.ProblemId == "" && req.Slug == nil {
 		return nil, s.createGrpcError(codes.InvalidArgument, "Problem ID or slug is required", "VALIDATION_ERROR", nil)
 	}
-	return s.RepoConnInstance.GetProblemByIDSlug(ctx, req)
+	cacheKey := fmt.Sprintf("problem:%s", req.ProblemId)
+	if req.ProblemId == "" {
+		cacheKey = fmt.Sprintf("problem_slug:%s", *req.Slug)
+	}
+	cachedProblem, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedProblem != nil {
+		var problem pb.GetProblemByIdSlugResponse
+		if err := json.Unmarshal(cachedProblem.([]byte), &problem); err == nil {
+			return &problem, nil
+		}
+	}
+	resp, err := s.RepoConnInstance.GetProblemByIDSlug(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	problemBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, problemBytes, 1*time.Hour); err != nil {
+		fmt.Printf("failed to cache problem by id/slug: %v\n", err)
+	}
+	return resp, nil
 }
 
+// getproblembyidlist retrieves problems by id list
 func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProblemByIdListRequest) (*pb.GetProblemByIdListResponse, error) {
 	if req.Page < 1 {
 		req.Page = 1
@@ -258,11 +402,27 @@ func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProb
 	if req.PageSize < 1 {
 		req.PageSize = 10
 	}
-	return s.RepoConnInstance.GetProblemByIDList(ctx, req)
+	cacheKey := fmt.Sprintf("problem_id_list:%d:%d", req.Page, req.PageSize)
+	cachedProblems, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedProblems != nil {
+		var problems pb.GetProblemByIdListResponse
+		if err := json.Unmarshal(cachedProblems.([]byte), &problems); err == nil {
+			return &problems, nil
+		}
+	}
+	resp, err := s.RepoConnInstance.GetProblemByIDList(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	problemsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, problemsBytes, 1*time.Hour); err != nil {
+		fmt.Printf("failed to cache problem id list: %v\n", err)
+	}
+	return resp, nil
 }
 
+// runusercodeproblem executes user code for a problem
 func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProblemRequest) (*pb.RunProblemResponse, error) {
-	//fetch the problem details
 	problem, err := s.RepoConnInstance.GetProblem(ctx, &pb.GetProblemRequest{ProblemId: req.ProblemId})
 	if err != nil {
 		return nil, fmt.Errorf("problem not found: %w", err)
@@ -270,7 +430,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 	submitCase := !req.IsRunTestcase
 
-	// Validate the requested language
 	validateCode, ok := problem.ValidateCode[req.Language]
 	if !ok {
 		return &pb.RunProblemResponse{
@@ -283,7 +442,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
-	// Prepare test cases
 	var testCases []model.TestCase
 	if req.IsRunTestcase {
 		for _, tc := range problem.TestCases.Run {
@@ -307,13 +465,11 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}
 	}
 
-	// Marshal test cases to JSON
 	testCasesJSON, err := json.Marshal(testCases)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal test cases: %w", err)
 	}
 
-	// Replace placeholders in the template
 	tmpl := validateCode.Template
 	if req.Language == "python" || req.Language == "javascript" || req.Language == "py" || req.Language == "js" {
 		escaped := strings.ReplaceAll(string(testCasesJSON), `"`, `\"`)
@@ -324,7 +480,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 	tmpl = strings.Replace(tmpl, "{FUNCTION_PLACEHOLDER}", req.UserCode, 1)
 
-	// Prepare the compiler request
 	compilerRequest := map[string]interface{}{
 		"code":     tmpl,
 		"language": req.Language,
@@ -334,7 +489,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
 	}
 
-	// Send the request to the NATS client
 	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 3*time.Second)
 	if err != nil {
 		return &pb.RunProblemResponse{
@@ -347,38 +501,12 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
-	// map[execution_time:1.230549718s output:{
-	// 	"totalTestCases": 32,
-	// 	"passedTestCases": 0,
-	// 	"failedTestCases": 32,
-	// 	"failedTestCase": {
-	// 		"testCaseIndex": 0,
-	// 		"input": {
-	// 			"nums": [
-	// 				1,
-	// 				2,
-	// 				3,
-	// 				1
-	// 			]
-	// 		},
-	// 		"expected": true,
-	// 		"received": false,
-	// 		"passed": false
-	// 	},
-	// 	"overallPass": false
-	// }
-
-	// Parse the response
-	// fmt.Println("msg data ",msg.Data)
-
 	var result map[string]interface{}
 	if err := json.Unmarshal(msg.Data, &result); err != nil {
 		return nil, fmt.Errorf("failed to parse execution result: %w", err)
 	}
 
-	// Extract the output
 	output, ok1 := result["output"].(string)
-	// executionTime,ok2 := result["execution_time"].(string)
 	if !ok1 {
 		return &pb.RunProblemResponse{
 			Success:       false,
@@ -390,7 +518,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
-	// Check for compilation errors
 	if strings.Contains(output, "syntax error") || strings.Contains(output, "# command-line-arguments") {
 		go s.processSubmission(ctx, req, "FAILED", submitCase, *problem, req.UserCode)
 		return &pb.RunProblemResponse{
@@ -403,7 +530,6 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
-	// Final step: Unmarshal output to ExecutionResult
 	var executionStatsResult model.ExecutionStatsResult
 	if err := json.Unmarshal([]byte(output), &executionStatsResult); err != nil {
 		executionStatsResult = model.ExecutionStatsResult{OverallPass: false}
@@ -416,6 +542,12 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 
 	s.processSubmission(ctx, req, status, submitCase, *problem, req.UserCode)
+	if submitCase && req.UserId != "" {
+		cacheKey := fmt.Sprintf("submissions:%s:%s", req.ProblemId, req.UserId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+		cacheKey = fmt.Sprintf("stats:%s", req.UserId)
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
 
 	return &pb.RunProblemResponse{
 		Success:       true,
@@ -426,28 +558,11 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}, nil
 }
 
-//USERID,score,output, execution_time,difficulty, isFirst
-
+// processsubmission handles submission processing
 func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProblemRequest, status string, submitCasePass bool, problem model.Problem, userCode string) {
 	if !submitCasePass || req.UserId == "" {
 		return
 	}
-
-	// type Submission struct {
-	// 	ID            primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	// 	UserID        string             `bson:"userId" json:"userId"`
-	// 	ProblemID     string             `bson:"problemId" json:"problemId"`
-	// 	ChallengeID   *string            `bson:"challengeid,omitempty" json:"challengeId,omitempty"`
-	// 	Title         string             `bson:"title"  json:"title"`
-	// 	SubmittedAt   time.Time          `bson:"submittedAt" json:"submittedAt"`
-	// 	Status        string             `bson:"status" json:"status"`
-	// 	Score         int                `bson:"score" json:"score"`
-	// 	Language      string             `json:"language" bson:"language"`
-	// 	Output        string             `json:"output,omitempty" bson:"output"`
-	// 	ExecutionTime float64            `json:"executionTime,omitempty" bson:"execution_time"`
-	// 	Difficulty    string             `json:"difficulty" bson:"difficulty"`
-	// 	IsFirst       bool               `bson:"isFirst" json:"isFirst"`
-	// }
 
 	var submission model.Submission
 	if req != nil {
@@ -455,7 +570,7 @@ func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProbl
 			ID:            primitive.NewObjectID(),
 			UserID:        req.UserId,
 			ProblemID:     req.ProblemId,
-			ChallengeID:   nil, // for now.
+			ChallengeID:   nil,
 			Title:         problem.Title,
 			SubmittedAt:   time.Now(),
 			UserCode:      userCode,
@@ -468,49 +583,51 @@ func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProbl
 	}
 
 	s.RepoConnInstance.PushSubmissionData(ctx, &submission, status)
+	cacheKey := fmt.Sprintf("submissions:%s:%s", req.ProblemId, req.UserId)
+	_ = s.RedisCacheClient.Delete(cacheKey)
+	cacheKey = fmt.Sprintf("stats:%s", req.UserId)
+	_ = s.RedisCacheClient.Delete(cacheKey)
 }
 
-// [
-// 	{
-// 		input: {
-// 			nums:[1,2],
-// 			target:9
-// 		},
-// 		expected:[0,1]
-// 	},
-// 	{
-// 		input: {
-// 			nums:[1,2],
-// 			target:9
-// 		},
-// 		expected:[0,1]
-// 	}
-// ]
-
-// func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, req *pb.GetSubmissionsRequest) (*pb.GetSubmissionsResponse, error) {
-
-
-func (s *ProblemService) GetProblemsDoneStatistics(ctx context.Context, req *pb.GetProblemsDoneStatisticsRequest) (*pb.GetProblemsDoneStatisticsResponse,error) {
+// getproblemsdonestatistics retrieves problem completion stats
+func (s *ProblemService) GetProblemsDoneStatistics(ctx context.Context, req *pb.GetProblemsDoneStatisticsRequest) (*pb.GetProblemsDoneStatisticsResponse, error) {
+	cacheKey := fmt.Sprintf("stats:%s", req.UserId)
+	cachedStats, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedStats != nil {
+		var stats pb.GetProblemsDoneStatisticsResponse
+		if err := json.Unmarshal(cachedStats.([]byte), &stats); err == nil {
+			return &stats, nil
+		}
+	}
 	data, err := s.RepoConnInstance.ProblemsDoneStatistics(req.UserId)
-	return &pb.GetProblemsDoneStatisticsResponse{
-			Data: &pb.ProblemsDoneStatistics{
-				MaxEasyCount:    data.MaxEasyCount,
-				DoneEasyCount:   data.DoneEasyCount,
-				MaxMediumCount:  data.MaxMediumCount,
-				DoneMediumCount: data.DoneMediumCount,
-				MaxHardCount:    data.MaxHardCount,
-				DoneHardCount:   data.DoneHardCount,
-			},
-	},err
+	if err != nil {
+		return nil, err
+	}
+	resp := &pb.GetProblemsDoneStatisticsResponse{
+		Data: &pb.ProblemsDoneStatistics{
+			MaxEasyCount:    data.MaxEasyCount,
+			DoneEasyCount:   data.DoneEasyCount,
+			MaxMediumCount:  data.MaxMediumCount,
+			DoneMediumCount: data.DoneMediumCount,
+			MaxHardCount:    data.MaxHardCount,
+			DoneHardCount:   data.DoneHardCount,
+		},
+	}
+	statsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
+		fmt.Printf("failed to cache problem stats: %v\n", err)
+	}
+	return resp, err
 }
 
+// mapproblemstatistics converts model stats to pb stats
 func MapProblemStatistics(input model.ProblemsDoneStatistics) pb.ProblemsDoneStatistics {
 	return pb.ProblemsDoneStatistics{
-			MaxEasyCount:    input.MaxEasyCount,
-			DoneEasyCount:   input.DoneEasyCount,
-			MaxMediumCount:  input.MaxMediumCount,
-			DoneMediumCount: input.DoneMediumCount,
-			MaxHardCount:    input.MaxHardCount,
-			DoneHardCount:   input.DoneHardCount,
+		MaxEasyCount:    input.MaxEasyCount,
+		DoneEasyCount:   input.DoneEasyCount,
+		MaxMediumCount:  input.MaxMediumCount,
+		DoneMediumCount: input.DoneMediumCount,
+		MaxHardCount:    input.MaxHardCount,
+		DoneHardCount:   input.DoneHardCount,
 	}
 }

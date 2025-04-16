@@ -52,6 +52,7 @@ type ProblemDone struct {
 type Submission struct {
 	ID            primitive.ObjectID `bson:"_id,omitempty" json:"id"`
 	UserID        string             `bson:"userId" json:"userId"`
+	Country       string             `bson:"country"`
 	ProblemID     string             `bson:"problemId" json:"problemId"`
 	ChallengeID   *string            `bson:"challengeId,omitempty" json:"challengeId,omitempty"`
 	Title         string             `bson:"title" json:"title"`
@@ -64,6 +65,25 @@ type Submission struct {
 	ExecutionTime float64            `bson:"executionTime,omitempty" json:"executionTime,omitempty"`
 	Difficulty    string             `bson:"difficulty" json:"difficulty"`
 	IsFirst       bool               `bson:"isFirst" json:"isFirst"`
+}
+
+type UserScore struct {
+	ID                string  `bson:"_id" json:"id"`
+	Score             float64 `bson:"totalScore" json:"score"`
+	Entity            string  `bson:"primaryCountry" json:"entity"`
+	ProblemsDoneCount int     `bson:"problemsDoneCount" json:"problemsDoneCount"`
+}
+
+// ActivityDay represents a day's activity count for the heatmap
+type ActivityDay struct {
+	Date     string `json:"date"`
+	Count    int    `json:"count"`
+	IsActive bool   `json:"isActive"`
+}
+
+// MonthlyActivityHeatmapProps represents the props for the monthly heatmap component
+type MonthlyActivityHeatmapProps struct {
+	Data []ActivityDay `json:"data,omitempty"`
 }
 
 type CodeData struct {

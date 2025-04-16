@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -13,7 +16,9 @@ import (
 	"xcode/repository"
 
 	pb "github.com/lijuuu/GlobalProtoXcode/ProblemsService"
+	redisboard "github.com/lijuuu/RedisBoard"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -23,12 +28,26 @@ type ProblemService struct {
 	RepoConnInstance repository.Repository
 	NatsClient       *natsclient.NatsClient
 	RedisCacheClient cache.RedisCache
+	LB               *redisboard.Leaderboard
 	pb.UnimplementedProblemsServiceServer
 }
 
-// newservice initializes a new problemservice
-func NewService(repo *repository.Repository, natsClient *natsclient.NatsClient, RedisCacheClient cache.RedisCache) *ProblemService {
-	return &ProblemService{RepoConnInstance: *repo, NatsClient: natsClient, RedisCacheClient: RedisCacheClient}
+func NewService(repo repository.Repository, natsClient *natsclient.NatsClient, redisCache cache.RedisCache, lb *redisboard.Leaderboard) *ProblemService {
+	svc := &ProblemService{
+		RepoConnInstance: repo,
+		NatsClient:       natsClient,
+		RedisCacheClient: redisCache,
+		LB:               lb,
+	}
+	// Sync leaderboard during initialization
+	if err := svc.SyncLeaderboardFromMongo(context.Background()); err != nil {
+		log.Fatalf("Failed to sync leaderboard during service initialization: %v", err)
+	}
+	return svc
+}
+
+func (s *ProblemService) SyncLeaderboardFromMongo(ctx context.Context) error {
+	return s.RepoConnInstance.SyncLeaderboardToRedis(ctx)
 }
 
 // getservice returns the problemservice instance
@@ -99,10 +118,16 @@ func (s *ProblemService) GetProblem(ctx context.Context, req *pb.GetProblemReque
 	cachedProblem, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedProblem != nil {
 		var problem pb.GetProblemResponse
-		if err := json.Unmarshal(cachedProblem.([]byte), &problem); err == nil {
+		cachedStr, ok := cachedProblem.(string)
+		if !ok {
+			fmt.Println("failed to assert cached problem to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &problem); err == nil {
 			return &problem, nil
 		}
 	}
+fetchFromDB:
 	problemRepoModel, err := s.RepoConnInstance.GetProblem(ctx, req)
 	if err != nil {
 		return nil, err
@@ -127,10 +152,16 @@ func (s *ProblemService) ListProblems(ctx context.Context, req *pb.ListProblemsR
 	cachedProblems, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedProblems != nil {
 		var problems pb.ListProblemsResponse
-		if err := json.Unmarshal(cachedProblems.([]byte), &problems); err == nil {
+		cachedStr, ok := cachedProblems.(string)
+		if !ok {
+			fmt.Println("failed to assert cached problems to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &problems); err == nil {
 			return &problems, nil
 		}
 	}
+fetchFromDB:
 	resp, err := s.RepoConnInstance.ListProblems(ctx, req)
 	if err != nil {
 		return nil, err
@@ -241,10 +272,16 @@ func (s *ProblemService) GetLanguageSupports(ctx context.Context, req *pb.GetLan
 	cachedLangs, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedLangs != nil {
 		var langs pb.GetLanguageSupportsResponse
-		if err := json.Unmarshal(cachedLangs.([]byte), &langs); err == nil {
+		cachedStr, ok := cachedLangs.(string)
+		if !ok {
+			fmt.Println("failed to assert cached languages to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &langs); err == nil {
 			return &langs, nil
 		}
 	}
+fetchFromDB:
 	resp, err := s.RepoConnInstance.GetLanguageSupports(ctx, req)
 	if err != nil {
 		return nil, err
@@ -352,10 +389,16 @@ func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, 
 	cachedSubmissions, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedSubmissions != nil {
 		var submissions pb.GetSubmissionsResponse
-		if err := json.Unmarshal(cachedSubmissions.([]byte), &submissions); err == nil {
+		cachedStr, ok := cachedSubmissions.(string)
+		if !ok {
+			fmt.Println("failed to assert cached submissions to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &submissions); err == nil {
 			return &submissions, nil
 		}
 	}
+fetchFromDB:
 	resp, err := s.RepoConnInstance.GetSubmissionsByOptionalProblemID(ctx, req)
 	if err != nil {
 		return nil, err
@@ -379,10 +422,16 @@ func (s *ProblemService) GetProblemByIDSlug(ctx context.Context, req *pb.GetProb
 	cachedProblem, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedProblem != nil {
 		var problem pb.GetProblemByIdSlugResponse
-		if err := json.Unmarshal(cachedProblem.([]byte), &problem); err == nil {
+		cachedStr, ok := cachedProblem.(string)
+		if !ok {
+			fmt.Println("failed to assert cached problem to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &problem); err == nil {
 			return &problem, nil
 		}
 	}
+fetchFromDB:
 	resp, err := s.RepoConnInstance.GetProblemByIDSlug(ctx, req)
 	if err != nil {
 		return nil, err
@@ -406,10 +455,16 @@ func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProb
 	cachedProblems, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedProblems != nil {
 		var problems pb.GetProblemByIdListResponse
-		if err := json.Unmarshal(cachedProblems.([]byte), &problems); err == nil {
+		cachedStr, ok := cachedProblems.(string)
+		if !ok {
+			fmt.Println("failed to assert cached problems to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &problems); err == nil {
 			return &problems, nil
 		}
 	}
+fetchFromDB:
 	resp, err := s.RepoConnInstance.GetProblemByIDList(ctx, req)
 	if err != nil {
 		return nil, err
@@ -423,15 +478,22 @@ func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProb
 
 // runusercodeproblem executes user code for a problem
 func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProblemRequest) (*pb.RunProblemResponse, error) {
+	// Log start of the function call
+	log.Printf("Running user code for problem ID: %s, Language: %s", req.ProblemId, req.Language)
+
+	// Retrieve problem data
 	problem, err := s.RepoConnInstance.GetProblem(ctx, &pb.GetProblemRequest{ProblemId: req.ProblemId})
 	if err != nil {
+		log.Printf("Error fetching problem %s: %v", req.ProblemId, err)
 		return nil, fmt.Errorf("problem not found: %w", err)
 	}
 
 	submitCase := !req.IsRunTestcase
 
+	// Check if the language is supported for validation
 	validateCode, ok := problem.ValidateCode[req.Language]
 	if !ok {
+		log.Printf("Invalid language: %s for problem ID: %s", req.Language, req.ProblemId)
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "INVALID_LANGUAGE",
@@ -443,6 +505,8 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 
 	var testCases []model.TestCase
+	// Log the process of collecting test cases
+	log.Printf("Collecting test cases for problem ID: %s", req)
 	if req.IsRunTestcase {
 		for _, tc := range problem.TestCases.Run {
 			if tc.ID != "" {
@@ -467,30 +531,36 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 	testCasesJSON, err := json.Marshal(testCases)
 	if err != nil {
+		log.Printf("Error marshaling test cases: %v", err)
 		return nil, fmt.Errorf("failed to marshal test cases: %w", err)
 	}
 
 	tmpl := validateCode.Template
+	// Prepare the code for the compiler
 	if req.Language == "python" || req.Language == "javascript" || req.Language == "py" || req.Language == "js" {
 		escaped := strings.ReplaceAll(string(testCasesJSON), `"`, `\"`)
 		tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", escaped, 1)
 	} else {
 		tmpl = strings.Replace(tmpl, "{TESTCASE_PLACEHOLDER}", string(testCasesJSON), 1)
 	}
-
 	tmpl = strings.Replace(tmpl, "{FUNCTION_PLACEHOLDER}", req.UserCode, 1)
 
+	// Create the compiler request payload
 	compilerRequest := map[string]interface{}{
 		"code":     tmpl,
 		"language": req.Language,
 	}
 	compilerRequestBytes, err := json.Marshal(compilerRequest)
 	if err != nil {
+		log.Printf("Error serializing compiler request: %v", err)
 		return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
 	}
 
+	// Log request for execution
+	log.Printf("Sending request to compiler for problem ID: %s", compilerRequest)
 	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 3*time.Second)
 	if err != nil {
+		log.Printf("Error executing code for problem ID: %s, Error: %v", req.ProblemId, err)
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "COMPILATION_ERROR",
@@ -503,11 +573,13 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(msg.Data, &result); err != nil {
+		log.Printf("Error parsing execution result for problem ID: %s, Error: %v", req.ProblemId, err)
 		return nil, fmt.Errorf("failed to parse execution result: %w", err)
 	}
 
-	output, ok1 := result["output"].(string)
-	if !ok1 {
+	output, ok := result["output"].(string)
+	if !ok {
+		log.Printf("Invalid execution result format for problem ID: %s", req.ProblemId)
 		return &pb.RunProblemResponse{
 			Success:       false,
 			ErrorType:     "EXECUTION_ERROR",
@@ -519,6 +591,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 
 	if strings.Contains(output, "syntax error") || strings.Contains(output, "# command-line-arguments") {
+		log.Printf("Compilation error in user code for problem ID: %s, Error: %s", req.ProblemId, output)
 		go s.processSubmission(ctx, req, "FAILED", submitCase, *problem, req.UserCode)
 		return &pb.RunProblemResponse{
 			Success:       false,
@@ -535,7 +608,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		executionStatsResult = model.ExecutionStatsResult{OverallPass: false}
 	}
 
-	fmt.Println(executionStatsResult)
+	log.Printf("Execution result for problem ID: %s: %+v", req.ProblemId, executionStatsResult)
 	status := "FAILED"
 	if executionStatsResult.OverallPass {
 		status = "SUCCESS"
@@ -548,6 +621,9 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		cacheKey = fmt.Sprintf("stats:%s", req.UserId)
 		_ = s.RedisCacheClient.Delete(cacheKey)
 	}
+
+	// Log the successful completion of the process
+	log.Printf("Completed user code execution for problem ID: %s, Status: %s", req.ProblemId, status)
 
 	return &pb.RunProblemResponse{
 		Success:       true,
@@ -569,6 +645,7 @@ func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProbl
 		submission = model.Submission{
 			ID:            primitive.NewObjectID(),
 			UserID:        req.UserId,
+			Country:       *req.Country,
 			ProblemID:     req.ProblemId,
 			ChallengeID:   nil,
 			Title:         problem.Title,
@@ -591,14 +668,22 @@ func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProbl
 
 // getproblemsdonestatistics retrieves problem completion stats
 func (s *ProblemService) GetProblemsDoneStatistics(ctx context.Context, req *pb.GetProblemsDoneStatisticsRequest) (*pb.GetProblemsDoneStatisticsResponse, error) {
+	fmt.Println(s.RepoConnInstance.GetMonthlyContributionHistory(req.UserId, 0, 0))
+
 	cacheKey := fmt.Sprintf("stats:%s", req.UserId)
 	cachedStats, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedStats != nil {
 		var stats pb.GetProblemsDoneStatisticsResponse
-		if err := json.Unmarshal(cachedStats.([]byte), &stats); err == nil {
+		cachedStr, ok := cachedStats.(string)
+		if !ok {
+			fmt.Println("failed to assert cached stats to string")
+			goto fetchFromDB
+		}
+		if err := json.Unmarshal([]byte(cachedStr), &stats); err == nil {
 			return &stats, nil
 		}
 	}
+fetchFromDB:
 	data, err := s.RepoConnInstance.ProblemsDoneStatistics(req.UserId)
 	if err != nil {
 		return nil, err
@@ -613,11 +698,57 @@ func (s *ProblemService) GetProblemsDoneStatistics(ctx context.Context, req *pb.
 			DoneHardCount:   data.DoneHardCount,
 		},
 	}
+
 	statsBytes, _ := json.Marshal(resp)
 	if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
 		fmt.Printf("failed to cache problem stats: %v\n", err)
 	}
 	return resp, err
+}
+
+func (s *ProblemService) GetMonthlyActivityHeatmap(ctx context.Context, req *pb.GetMonthlyActivityHeatmapRequest) (*pb.GetMonthlyActivityHeatmapResponse, error) {
+	cacheKey := fmt.Sprintf("heatmap:%s:%d:%d", req.UserID, req.Year, req.Month)
+	cachedData, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedData != nil {
+		cachedStr, ok := cachedData.(string)
+		if !ok {
+			fmt.Println("failed to assert cached data to string")
+		} else {
+			var heatmap pb.GetMonthlyActivityHeatmapResponse
+			if err := json.Unmarshal([]byte(cachedStr), &heatmap); err == nil {
+				return &heatmap, nil
+			}
+		}
+	}
+
+	data, err := s.RepoConnInstance.GetMonthlyContributionHistory(req.UserID, int(req.Month), int(req.Year))
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &pb.GetMonthlyActivityHeatmapResponse{
+		Data: make([]*pb.ActivityDay, len(data.Data)),
+	}
+	for i, day := range data.Data {
+		resp.Data[i] = &pb.ActivityDay{
+			Date:     day.Date, // Fixed to use day.Date
+			Count:    int32(day.Count),
+			IsActive: day.IsActive,
+		}
+	}
+
+	now := time.Now()
+	nextMidnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+	ttl := time.Until(nextMidnight)
+
+	heatmapBytes, err := json.Marshal(resp)
+	if err != nil {
+		fmt.Printf("failed to marshal heatmap response: %v\n", err)
+	} else if err := s.RedisCacheClient.Set(cacheKey, heatmapBytes, ttl); err != nil {
+		fmt.Printf("failed to cache monthly activity heatmap: %v\n", err)
+	}
+
+	return resp, nil
 }
 
 // mapproblemstatistics converts model stats to pb stats
@@ -630,4 +761,518 @@ func MapProblemStatistics(input model.ProblemsDoneStatistics) pb.ProblemsDoneSta
 		MaxHardCount:    input.MaxHardCount,
 		DoneHardCount:   input.DoneHardCount,
 	}
+}
+
+func (s *ProblemService) GetTopKGlobal(ctx context.Context, req *pb.GetTopKGlobalRequest) (*pb.GetTopKGlobalResponse, error) {
+	startRedis := time.Now()
+	users, err := s.LB.GetTopKGlobal()
+	if err == nil && len(users) > 0 {
+		log.Printf("REDIS TIME | GetTopKGlobal: %v", time.Since(startRedis))
+		resp := &pb.GetTopKGlobalResponse{
+			Users: make([]*pb.UserScore, len(users)),
+		}
+		for i, user := range users {
+			resp.Users[i] = &pb.UserScore{
+				UserId: user.ID,
+				Score:  user.Score,
+				Entity: user.Entity,
+			}
+		}
+		return resp, nil
+	}
+	log.Printf("REDIS MISS | GetTopKGlobal: %v", time.Since(startRedis))
+
+	startMongo := time.Now()
+	k := int(req.K)
+	if k == 0 {
+		k = 10
+	}
+	mongoUsers, err := s.RepoConnInstance.GetTopKGlobalMongo(ctx, k)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch top K global from MongoDB: %w", err)
+	}
+	log.Printf("MONGO TIME | GetTopKGlobal: %v", time.Since(startMongo))
+
+	resp := &pb.GetTopKGlobalResponse{
+		Users: make([]*pb.UserScore, len(mongoUsers)),
+	}
+	for i, user := range mongoUsers {
+		resp.Users[i] = &pb.UserScore{
+			UserId: user.ID,
+			Score:  user.Score,
+			Entity: user.Entity,
+		}
+	}
+	return resp, nil
+}
+
+func (s *ProblemService) GetTopKEntity(ctx context.Context, req *pb.GetTopKEntityRequest) (*pb.GetTopKEntityResponse, error) {
+	startRedis := time.Now()
+	users, err := s.LB.GetTopKEntity(req.Entity)
+	if err == nil && len(users) > 0 {
+		log.Printf("REDIS TIME | GetTopKEntity: %v", time.Since(startRedis))
+		resp := &pb.GetTopKEntityResponse{
+			Users: make([]*pb.UserScore, len(users)),
+		}
+		for i, user := range users {
+			resp.Users[i] = &pb.UserScore{
+				UserId: user.ID,
+				Score:  user.Score,
+				Entity: user.Entity,
+			}
+		}
+		return resp, nil
+	}
+	log.Printf("REDIS MISS | GetTopKEntity: %v", time.Since(startRedis))
+
+	startMongo := time.Now()
+	mongoUsers, err := s.RepoConnInstance.GetTopKEntityMongo(ctx, req.Entity, 10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch top K entity from MongoDB: %w", err)
+	}
+	log.Printf("MONGO TIME | GetTopKEntity: %v", time.Since(startMongo))
+
+	resp := &pb.GetTopKEntityResponse{
+		Users: make([]*pb.UserScore, len(mongoUsers)),
+	}
+	for i, user := range mongoUsers {
+		resp.Users[i] = &pb.UserScore{
+			UserId: user.ID,
+			Score:  user.Score,
+			Entity: user.Entity,
+		}
+	}
+	return resp, nil
+}
+
+func (s *ProblemService) GetUserRank(ctx context.Context, req *pb.GetUserRankRequest) (*pb.GetUserRankResponse, error) {
+	startRedis := time.Now()
+	globalRank, err := s.LB.GetRankGlobal(req.UserId)
+	if err == nil {
+		entityRank, err := s.LB.GetRankEntity(req.UserId)
+		if err == nil {
+			log.Printf("REDIS TIME | GetUserRank: %v", time.Since(startRedis))
+			return &pb.GetUserRankResponse{
+				GlobalRank: int32(globalRank),
+				EntityRank: int32(entityRank),
+			}, nil
+		}
+	}
+	log.Printf("REDIS MISS | GetUserRank: %v", time.Since(startRedis))
+
+	startMongo := time.Now()
+	globalRank, entityRank, err := s.RepoConnInstance.GetUserRankMongo(ctx, req.UserId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user rank from MongoDB: %w", err)
+	}
+	log.Printf("MONGO TIME | GetUserRank: %v", time.Since(startMongo))
+
+	return &pb.GetUserRankResponse{
+		GlobalRank: int32(globalRank),
+		EntityRank: int32(entityRank),
+	}, nil
+}
+
+func (s *ProblemService) GetLeaderboardData(ctx context.Context, req *pb.GetLeaderboardDataRequest) (*pb.GetLeaderboardDataResponse, error) {
+	startRedis := time.Now()
+	data, err := s.LB.GetUserLeaderboardData(req.UserId)
+	// fmt.Println(data)
+	if err == nil {
+		log.Printf("REDIS TIME | GetLeaderboardData: %v", time.Since(startRedis))
+		resp := &pb.GetLeaderboardDataResponse{
+			UserId:     data.UserID,
+			Score:      data.Score,
+			Entity:     data.Entity,
+			GlobalRank: int32(data.GlobalRank),
+			EntityRank: int32(data.EntityRank),
+			TopKGlobal: make([]*pb.UserScore, len(data.TopKGlobal)),
+			TopKEntity: make([]*pb.UserScore, len(data.TopKEntity)),
+		}
+		for i, user := range data.TopKGlobal {
+			resp.TopKGlobal[i] = &pb.UserScore{
+				UserId: user.ID,
+				Score:  user.Score,
+				Entity: user.Entity,
+			}
+		}
+		for i, user := range data.TopKEntity {
+			resp.TopKEntity[i] = &pb.UserScore{
+				UserId: user.ID,
+				Score:  user.Score,
+				Entity: user.Entity,
+			}
+		}
+		return resp, nil
+	}
+	log.Printf("REDIS MISS | GetLeaderboardData: %v", time.Since(startRedis))
+
+	startMongo := time.Now()
+	mongoData, err := s.RepoConnInstance.GetLeaderboardDataMongo(ctx, req.UserId)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, errors.New("user not found")
+		}
+		return nil, fmt.Errorf("failed to fetch leaderboard data from MongoDB: %w", err)
+	}
+
+	// Fetch additional MongoDB data for ranks and top K
+	globalRank, entityRank, err := s.RepoConnInstance.GetUserRankMongo(ctx, req.UserId)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user ranks from MongoDB: %w", err)
+	}
+	topKGlobal, err := s.RepoConnInstance.GetTopKGlobalMongo(ctx, 10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch top K global from MongoDB: %w", err)
+	}
+	var topKEntity []model.UserScore
+	if mongoData.Entity != "" {
+		topKEntity, err = s.RepoConnInstance.GetTopKEntityMongo(ctx, mongoData.Entity, 10)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch top K entity from MongoDB: %w", err)
+		}
+	}
+
+	log.Printf("MONGO TIME | GetLeaderboardData: %v", time.Since(startMongo))
+
+	resp := &pb.GetLeaderboardDataResponse{
+		UserId:     mongoData.ID,
+		Score:      mongoData.Score,
+		Entity:     mongoData.Entity,
+		GlobalRank: int32(globalRank),
+		EntityRank: int32(entityRank),
+		TopKGlobal: make([]*pb.UserScore, len(topKGlobal)),
+		TopKEntity: make([]*pb.UserScore, len(topKEntity)),
+	}
+	for i, user := range topKGlobal {
+		resp.TopKGlobal[i] = &pb.UserScore{
+			UserId: user.ID,
+			Score:  user.Score,
+			Entity: user.Entity,
+			// ProblemsDoneCount:user.ProblemsDoneCount,
+		}
+	}
+	for i, user := range topKEntity {
+		resp.TopKEntity[i] = &pb.UserScore{
+			UserId: user.ID,
+			Score:  user.Score,
+			Entity: user.Entity,
+			// ProblemsDoneCount: user.ProblemsDoneCount,
+		}
+	}
+	return resp, nil
+}
+
+// create a new challenge
+func (s *ProblemService) CreateChallenge(ctx context.Context, req *pb.CreateChallengeRequest) (*pb.CreateChallengeResponse, error) {
+	if req.Title == "" || req.CreatorId == "" || req.Difficulty == "" || len(req.ProblemIds) == 0 {
+		return nil, s.createGrpcError(codes.InvalidArgument, "title, creator id, difficulty, and at least one problem id are required", "VALIDATION_ERROR", nil)
+	}
+
+	// generate access code if not provided
+	accessCode := req.AccessCode
+	if accessCode == nil || *accessCode == "" {
+		code, err := generateAccessCode(8)
+		if err != nil {
+			return nil, s.createGrpcError(codes.Internal, "failed to generate access code", "INTERNAL_ERROR", err)
+		}
+		accessCode = &code
+	}
+
+	// generate password if private challenge
+	password := ""
+	if req.IsPrivate {
+		pass, err := generateAccessCode(12)
+		if err != nil {
+			return nil, s.createGrpcError(codes.Internal, "failed to generate password", "INTERNAL_ERROR", err)
+		}
+		password = pass
+	}
+
+	resp, err := s.RepoConnInstance.CreateChallenge(ctx, req, *accessCode, password)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to create challenge", "DB_ERROR", err)
+	}
+
+	// clear cache for public challenges if not private
+	if !req.IsPrivate {
+		cacheKey := "public_challenges:*"
+		_ = s.RedisCacheClient.Delete(cacheKey)
+	}
+
+	joinURL := fmt.Sprintf("https://xcode.com/challenges/join/%s", resp.Id)
+	return &pb.CreateChallengeResponse{
+		Id:         resp.Id,
+		AccessCode: *accessCode,
+		Password:   password,
+		JoinUrl:    joinURL,
+	}, nil
+}
+
+// get a challenge by id
+func (s *ProblemService) GetChallenge(ctx context.Context, req *pb.GetChallengeRequest) (*pb.GetChallengeResponse, error) {
+	if req.Id == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id is required", "VALIDATION_ERROR", nil)
+	}
+
+	cacheKey := fmt.Sprintf("challenge:%s", req.Id)
+	cachedChallenge, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedChallenge != nil {
+		var challenge pb.GetChallengeResponse
+		if cachedStr, ok := cachedChallenge.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &challenge); err == nil {
+				return &challenge, nil
+			}
+		}
+	}
+
+	resp, err := s.RepoConnInstance.GetChallenge(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.NotFound, "challenge not found", "NOT_FOUND", err)
+	}
+
+	leaderboard, err := s.RepoConnInstance.GetChallengeLeaderboard(ctx, req.Id)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch leaderboard", "DB_ERROR", err)
+	}
+
+	response := &pb.GetChallengeResponse{
+		Challenge:   resp.Challenge,
+		Leaderboard: leaderboard,
+	}
+
+	challengeBytes, _ := json.Marshal(response)
+	if err := s.RedisCacheClient.Set(cacheKey, challengeBytes, 1*time.Hour); err != nil {
+		log.Printf("failed to cache challenge: %v", err)
+	}
+
+	return response, nil
+}
+
+// get public challenges with pagination
+func (s *ProblemService) GetPublicChallenges(ctx context.Context, req *pb.GetPublicChallengesRequest) (*pb.GetPublicChallengesResponse, error) {
+	if req.Page < 1 {
+		req.Page = 1
+	}
+	if req.PageSize < 1 {
+		req.PageSize = 10
+	}
+
+	cacheKey := fmt.Sprintf("public_challenges:%s:%v:%d:%d", req.Difficulty, req.IsActive, req.Page, req.PageSize)
+	cachedChallenges, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedChallenges != nil {
+		var challenges pb.GetPublicChallengesResponse
+		if cachedStr, ok := cachedChallenges.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &challenges); err == nil {
+				return &challenges, nil
+			}
+		}
+	}
+
+	resp, err := s.RepoConnInstance.GetPublicChallenges(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch public challenges", "DB_ERROR", err)
+	}
+
+	challengesBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, challengesBytes, 1*time.Hour); err != nil {
+		log.Printf("failed to cache public challenges: %v", err)
+	}
+
+	return resp, nil
+}
+
+// join a challenge
+func (s *ProblemService) JoinChallenge(ctx context.Context, req *pb.JoinChallengeRequest) (*pb.JoinChallengeResponse, error) {
+	if req.ChallengeId == "" || req.UserId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+	}
+
+	resp, err := s.RepoConnInstance.JoinChallenge(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.InvalidArgument, "failed to join challenge", "ACCESS_DENIED", err)
+	}
+
+	cacheKey := fmt.Sprintf("challenge:%s", req.ChallengeId)
+	_ = s.RedisCacheClient.Delete(cacheKey)
+
+	return resp, nil
+}
+
+// start a challenge
+func (s *ProblemService) StartChallenge(ctx context.Context, req *pb.StartChallengeRequest) (*pb.StartChallengeResponse, error) {
+	if req.ChallengeId == "" || req.UserId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+	}
+
+	resp, err := s.RepoConnInstance.StartChallenge(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.InvalidArgument, "failed to start challenge", "INVALID_STATE", err)
+	}
+
+	cacheKey := fmt.Sprintf("challenge:%s", req.ChallengeId)
+	_ = s.RedisCacheClient.Delete(cacheKey)
+	cacheKey = "public_challenges:*"
+	_ = s.RedisCacheClient.Delete(cacheKey)
+
+	return resp, nil
+}
+
+// end a challenge
+func (s *ProblemService) EndChallenge(ctx context.Context, req *pb.EndChallengeRequest) (*pb.EndChallengeResponse, error) {
+	if req.ChallengeId == "" || req.UserId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+	}
+
+	leaderboard, err := s.RepoConnInstance.GetChallengeLeaderboard(ctx, req.ChallengeId)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch leaderboard", "DB_ERROR", err)
+	}
+
+	resp, err := s.RepoConnInstance.EndChallenge(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.InvalidArgument, "failed to end challenge", "INVALID_STATE", err)
+	}
+
+	cacheKey := fmt.Sprintf("challenge:%s", req.ChallengeId)
+	_ = s.RedisCacheClient.Delete(cacheKey)
+	cacheKey = "public_challenges:*"
+	_ = s.RedisCacheClient.Delete(cacheKey)
+
+	return &pb.EndChallengeResponse{
+		Success:     resp.Success,
+		Leaderboard: leaderboard,
+	}, nil
+}
+
+// get submission status
+func (s *ProblemService) GetSubmissionStatus(ctx context.Context, req *pb.GetSubmissionStatusRequest) (*pb.GetSubmissionStatusResponse, error) {
+	if req.SubmissionId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "submission id is required", "VALIDATION_ERROR", nil)
+	}
+
+	cacheKey := fmt.Sprintf("submission:%s", req.SubmissionId)
+	cachedSubmission, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedSubmission != nil {
+		var submission pb.GetSubmissionStatusResponse
+		if cachedStr, ok := cachedSubmission.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &submission); err == nil {
+				return &submission, nil
+			}
+		}
+	}
+
+	resp, err := s.RepoConnInstance.GetSubmissionStatus(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.NotFound, "submission not found", "NOT_FOUND", err)
+	}
+
+	submissionBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, submissionBytes, 30*time.Minute); err != nil {
+		log.Printf("failed to cache submission: %v", err)
+	}
+
+	return resp, nil
+}
+
+// get all submissions for a challenge
+func (s *ProblemService) GetChallengeSubmissions(ctx context.Context, req *pb.GetChallengeSubmissionsRequest) (*pb.GetChallengeSubmissionsResponse, error) {
+	if req.ChallengeId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id is required", "VALIDATION_ERROR", nil)
+	}
+
+	cacheKey := fmt.Sprintf("challenge_submissions:%s", req.ChallengeId)
+	cachedSubmissions, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedSubmissions != nil {
+		var submissions pb.GetChallengeSubmissionsResponse
+		if cachedStr, ok := cachedSubmissions.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &submissions); err == nil {
+				return &submissions, nil
+			}
+		}
+	}
+
+	resp, err := s.RepoConnInstance.GetChallengeSubmissions(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch submissions", "DB_ERROR", err)
+	}
+
+	submissionsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 30*time.Minute); err != nil {
+		log.Printf("failed to cache challenge submissions: %v", err)
+	}
+
+	return resp, nil
+}
+
+// get user stats across all challenges
+func (s *ProblemService) GetUserStats(ctx context.Context, req *pb.GetUserStatsRequest) (*pb.GetUserStatsResponse, error) {
+	if req.UserId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "user id is required", "VALIDATION_ERROR", nil)
+	}
+
+	cacheKey := fmt.Sprintf("user_stats:%s", req.UserId)
+	cachedStats, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedStats != nil {
+		var stats pb.GetUserStatsResponse
+		if cachedStr, ok := cachedStats.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &stats); err == nil {
+				return &stats, nil
+			}
+		}
+	}
+
+	resp, err := s.RepoConnInstance.GetUserStats(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch user stats", "DB_ERROR", err)
+	}
+
+	statsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
+		log.Printf("failed to cache user stats: %v", err)
+	}
+
+	return resp, nil
+}
+
+// get user stats for a specific challenge
+func (s *ProblemService) GetChallengeUserStats(ctx context.Context, req *pb.GetChallengeUserStatsRequest) (*pb.GetChallengeUserStatsResponse, error) {
+	if req.ChallengeId == "" || req.UserId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+	}
+
+	cacheKey := fmt.Sprintf("challenge_user_stats:%s:%s", req.ChallengeId, req.UserId)
+	cachedStats, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedStats != nil {
+		var stats pb.GetChallengeUserStatsResponse
+		if cachedStr, ok := cachedStats.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &stats); err == nil {
+				return &stats, nil
+			}
+		}
+	}
+
+	resp, err := s.RepoConnInstance.GetChallengeUserStats(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch challenge user stats", "DB_ERROR", err)
+	}
+
+	statsBytes, _ := json.Marshal(resp)
+	if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
+		log.Printf("failed to cache challenge user stats: %v", err)
+	}
+
+	return resp, nil
+}
+
+// generate random access code or password
+func generateAccessCode(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	for i, v := range b {
+		b[i] = charset[v%byte(len(charset))]
+	}
+	return string(b), nil
 }

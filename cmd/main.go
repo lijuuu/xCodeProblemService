@@ -11,6 +11,7 @@ import (
 	"xcode/service"
 
 	problemService "github.com/lijuuu/GlobalProtoXcode/ProblemsService"
+	redisboard "github.com/lijuuu/RedisBoard"
 
 	"google.golang.org/grpc"
 )
@@ -22,15 +23,30 @@ func main() {
 		log.Fatalf("Failed to create NATS client: %v", err)
 	}
 
-	configValues:= configs.LoadConfig()
+	configValues := configs.LoadConfig()
 
 	redisCacheClient := cache.NewRedisCache(configValues.RedisURL, "", 0)
 
 	mongoclientInstance := mongoconn.ConnectDB()
 
-	repoInstance := repository.NewRepository(mongoclientInstance)
+	// Initialize RedisBoard Leaderboard
+	lbConfig := redisboard.Config{
+		Namespace:   "problems_leaderboard",
+		K:           10,
+		MaxUsers:    1_000_000,
+		MaxEntities: 200,
+		FloatScores: true,
+		RedisAddr:   configValues.RedisURL, 
+	}
+	lb, err := redisboard.New(lbConfig)
+	if err != nil {
+		log.Fatalf("Failed to initialize leaderboard: %v", err)
+	}
+	defer lb.Close()
 
-	serviceInstance := service.NewService(repoInstance, natsClient,*redisCacheClient)
+	repoInstance := repository.NewRepository(mongoclientInstance,lb)
+
+	serviceInstance := service.NewService(*repoInstance, natsClient, *redisCacheClient,lb)
 
 	// Start gRPC server
 	lis, err := net.Listen("tcp", ":"+configValues.ProblemService)

@@ -5,7 +5,8 @@ go 1.24.1
 require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/joho/godotenv v1.5.1
-	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250415050907-cdd69034720f
+	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250416164339-2a48cd5067bf
+	github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f
 	github.com/nats-io/nats.go v1.39.1
 	go.mongodb.org/mongo-driver v1.17.3
 	google.golang.org/grpc v1.70.0
@@ -19,6 +20,7 @@ require (
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/nats-io/nkeys v0.4.9 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/redis/go-redis/v9 v9.7.3 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.1.2 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect

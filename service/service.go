@@ -404,7 +404,7 @@ fetchFromDB:
 		return nil, err
 	}
 	submissionsBytes, _ := json.Marshal(resp)
-	if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 30*time.Minute); err != nil {
+	if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 5*time.Minute); err != nil {
 		fmt.Printf("failed to cache submissions: %v\n", err)
 	}
 	return resp, nil
@@ -444,7 +444,7 @@ fetchFromDB:
 }
 
 // getproblembyidlist retrieves problems by id list
-func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProblemByIdListRequest) (*pb.GetProblemByIdListResponse, error) {
+func (s *ProblemService) GetProblemMetadataList(ctx context.Context, req *pb.GetProblemMetadataListRequest) (*pb.GetProblemMetadataListResponse, error) {
 	if req.Page < 1 {
 		req.Page = 1
 	}
@@ -454,7 +454,7 @@ func (s *ProblemService) GetProblemByIDList(ctx context.Context, req *pb.GetProb
 	cacheKey := fmt.Sprintf("problem_id_list:%d:%d", req.Page, req.PageSize)
 	cachedProblems, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedProblems != nil {
-		var problems pb.GetProblemByIdListResponse
+		var problems pb.GetProblemMetadataListResponse
 		cachedStr, ok := cachedProblems.(string)
 		if !ok {
 			fmt.Println("failed to assert cached problems to string")
@@ -662,6 +662,10 @@ func (s *ProblemService) processSubmission(ctx context.Context, req *pb.RunProbl
 	s.RepoConnInstance.PushSubmissionData(ctx, &submission, status)
 	cacheKey := fmt.Sprintf("submissions:%s:%s", req.ProblemId, req.UserId)
 	_ = s.RedisCacheClient.Delete(cacheKey)
+	
+	cacheKey = fmt.Sprintf("heatmap:%s:%d:%d", req.UserId, time.Now().Year(), time.Now().Month())
+	_=s.RedisCacheClient.Delete(cacheKey)
+
 	cacheKey = fmt.Sprintf("stats:%s", req.UserId)
 	_ = s.RedisCacheClient.Delete(cacheKey)
 }
@@ -962,23 +966,16 @@ func (s *ProblemService) GetLeaderboardData(ctx context.Context, req *pb.GetLead
 	return resp, nil
 }
 
-// create a new challenge
 func (s *ProblemService) CreateChallenge(ctx context.Context, req *pb.CreateChallengeRequest) (*pb.CreateChallengeResponse, error) {
 	if req.Title == "" || req.CreatorId == "" || req.Difficulty == "" || len(req.ProblemIds) == 0 {
-		return nil, s.createGrpcError(codes.InvalidArgument, "title, creator id, difficulty, and at least one problem id are required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "title, creator_id, difficulty, and at least one problem_id are required", "VALIDATION_ERROR", nil)
 	}
 
-	// generate access code if not provided
-	accessCode := req.AccessCode
-	if accessCode == nil || *accessCode == "" {
-		code, err := generateAccessCode(8)
-		if err != nil {
-			return nil, s.createGrpcError(codes.Internal, "failed to generate access code", "INTERNAL_ERROR", err)
-		}
-		accessCode = &code
+	roomCode, err := generateAccessCode(8)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to generate room code", "INTERNAL_ERROR", err)
 	}
 
-	// generate password if private challenge
 	password := ""
 	if req.IsPrivate {
 		pass, err := generateAccessCode(12)
@@ -988,44 +985,40 @@ func (s *ProblemService) CreateChallenge(ctx context.Context, req *pb.CreateChal
 		password = pass
 	}
 
-	resp, err := s.RepoConnInstance.CreateChallenge(ctx, req, *accessCode, password)
+	resp, err := s.RepoConnInstance.CreateChallenge(ctx, req, roomCode, password)
 	if err != nil {
 		return nil, s.createGrpcError(codes.Internal, "failed to create challenge", "DB_ERROR", err)
 	}
 
-	// clear cache for public challenges if not private
 	if !req.IsPrivate {
-		cacheKey := "public_challenges:*"
+		cacheKey := "challenges:public:*"
 		_ = s.RedisCacheClient.Delete(cacheKey)
 	}
 
-	joinURL := fmt.Sprintf("https://xcode.com/challenges/join/%s", resp.Id)
 	return &pb.CreateChallengeResponse{
-		Id:         resp.Id,
-		AccessCode: *accessCode,
-		Password:   password,
-		JoinUrl:    joinURL,
+		Id:       resp.Id,
+		Password: password,
+		JoinUrl:  fmt.Sprintf("https://xcode.com/challenges/join/%s/%v", resp.Id, resp.Password),
 	}, nil
 }
 
-// get a challenge by id
-func (s *ProblemService) GetChallenge(ctx context.Context, req *pb.GetChallengeRequest) (*pb.GetChallengeResponse, error) {
+func (s *ProblemService) GetChallengeDetails(ctx context.Context, req *pb.GetChallengeDetailsRequest) (*pb.GetChallengeDetailsResponse, error) {
 	if req.Id == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id is required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge_id and user_id are required", "VALIDATION_ERROR", nil)
 	}
 
-	cacheKey := fmt.Sprintf("challenge:%s", req.Id)
-	cachedChallenge, err := s.RedisCacheClient.Get(cacheKey)
-	if err == nil && cachedChallenge != nil {
-		var challenge pb.GetChallengeResponse
-		if cachedStr, ok := cachedChallenge.(string); ok {
-			if err := json.Unmarshal([]byte(cachedStr), &challenge); err == nil {
-				return &challenge, nil
+	cacheKey := fmt.Sprintf("challenge_details:%s", req.Id)
+	cachedDetails, err := s.RedisCacheClient.Get(cacheKey)
+	if err == nil && cachedDetails != nil {
+		var details pb.GetChallengeDetailsResponse
+		if cachedStr, ok := cachedDetails.(string); ok {
+			if err := json.Unmarshal([]byte(cachedStr), &details); err == nil {
+				return &details, nil
 			}
 		}
 	}
 
-	resp, err := s.RepoConnInstance.GetChallenge(ctx, req)
+	challengeResp, err := s.RepoConnInstance.GetChallenge(ctx, &pb.GetChallengeDetailsRequest{Id: req.Id})
 	if err != nil {
 		return nil, s.createGrpcError(codes.NotFound, "challenge not found", "NOT_FOUND", err)
 	}
@@ -1035,20 +1028,19 @@ func (s *ProblemService) GetChallenge(ctx context.Context, req *pb.GetChallengeR
 		return nil, s.createGrpcError(codes.Internal, "failed to fetch leaderboard", "DB_ERROR", err)
 	}
 
-	response := &pb.GetChallengeResponse{
-		Challenge:   resp.Challenge,
+	response := &pb.GetChallengeDetailsResponse{
+		Challenge:   challengeResp.Challenge,
 		Leaderboard: leaderboard,
 	}
 
-	challengeBytes, _ := json.Marshal(response)
-	if err := s.RedisCacheClient.Set(cacheKey, challengeBytes, 1*time.Hour); err != nil {
-		log.Printf("failed to cache challenge: %v", err)
+	detailsBytes, _ := json.Marshal(response)
+	if err := s.RedisCacheClient.Set(cacheKey, detailsBytes, 1*time.Hour); err != nil {
+		log.Printf("failed to cache challenge details: %v", err)
 	}
 
 	return response, nil
 }
 
-// get public challenges with pagination
 func (s *ProblemService) GetPublicChallenges(ctx context.Context, req *pb.GetPublicChallengesRequest) (*pb.GetPublicChallengesResponse, error) {
 	if req.Page < 1 {
 		req.Page = 1
@@ -1057,7 +1049,7 @@ func (s *ProblemService) GetPublicChallenges(ctx context.Context, req *pb.GetPub
 		req.PageSize = 10
 	}
 
-	cacheKey := fmt.Sprintf("public_challenges:%s:%v:%d:%d", req.Difficulty, req.IsActive, req.Page, req.PageSize)
+	cacheKey := fmt.Sprintf("challenges:public:%s:%v:%v", req.Difficulty, req.IsActive, req.UserId)
 	cachedChallenges, err := s.RedisCacheClient.Get(cacheKey)
 	if err == nil && cachedChallenges != nil {
 		var challenges pb.GetPublicChallengesResponse
@@ -1081,10 +1073,9 @@ func (s *ProblemService) GetPublicChallenges(ctx context.Context, req *pb.GetPub
 	return resp, nil
 }
 
-// join a challenge
 func (s *ProblemService) JoinChallenge(ctx context.Context, req *pb.JoinChallengeRequest) (*pb.JoinChallengeResponse, error) {
 	if req.ChallengeId == "" || req.UserId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge_id, user_id are required", "VALIDATION_ERROR", nil)
 	}
 
 	resp, err := s.RepoConnInstance.JoinChallenge(ctx, req)
@@ -1092,16 +1083,15 @@ func (s *ProblemService) JoinChallenge(ctx context.Context, req *pb.JoinChalleng
 		return nil, s.createGrpcError(codes.InvalidArgument, "failed to join challenge", "ACCESS_DENIED", err)
 	}
 
-	cacheKey := fmt.Sprintf("challenge:%s", req.ChallengeId)
+	cacheKey := fmt.Sprintf("challenge_details:%s:*", req.ChallengeId)
 	_ = s.RedisCacheClient.Delete(cacheKey)
 
 	return resp, nil
 }
 
-// start a challenge
 func (s *ProblemService) StartChallenge(ctx context.Context, req *pb.StartChallengeRequest) (*pb.StartChallengeResponse, error) {
 	if req.ChallengeId == "" || req.UserId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge_id and user_id are required", "VALIDATION_ERROR", nil)
 	}
 
 	resp, err := s.RepoConnInstance.StartChallenge(ctx, req)
@@ -1109,18 +1099,17 @@ func (s *ProblemService) StartChallenge(ctx context.Context, req *pb.StartChalle
 		return nil, s.createGrpcError(codes.InvalidArgument, "failed to start challenge", "INVALID_STATE", err)
 	}
 
-	cacheKey := fmt.Sprintf("challenge:%s", req.ChallengeId)
+	cacheKey := fmt.Sprintf("challenge_details:%s:*", req.ChallengeId)
 	_ = s.RedisCacheClient.Delete(cacheKey)
-	cacheKey = "public_challenges:*"
+	cacheKey = "challenges:public:*"
 	_ = s.RedisCacheClient.Delete(cacheKey)
 
 	return resp, nil
 }
 
-// end a challenge
 func (s *ProblemService) EndChallenge(ctx context.Context, req *pb.EndChallengeRequest) (*pb.EndChallengeResponse, error) {
 	if req.ChallengeId == "" || req.UserId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge_id and user_id are required", "VALIDATION_ERROR", nil)
 	}
 
 	leaderboard, err := s.RepoConnInstance.GetChallengeLeaderboard(ctx, req.ChallengeId)
@@ -1133,9 +1122,9 @@ func (s *ProblemService) EndChallenge(ctx context.Context, req *pb.EndChallengeR
 		return nil, s.createGrpcError(codes.InvalidArgument, "failed to end challenge", "INVALID_STATE", err)
 	}
 
-	cacheKey := fmt.Sprintf("challenge:%s", req.ChallengeId)
+	cacheKey := fmt.Sprintf("challenge_details:%s:*", req.ChallengeId)
 	_ = s.RedisCacheClient.Delete(cacheKey)
-	cacheKey = "public_challenges:*"
+	cacheKey = "challenges:public:*"
 	_ = s.RedisCacheClient.Delete(cacheKey)
 
 	return &pb.EndChallengeResponse{
@@ -1144,10 +1133,9 @@ func (s *ProblemService) EndChallenge(ctx context.Context, req *pb.EndChallengeR
 	}, nil
 }
 
-// get submission status
 func (s *ProblemService) GetSubmissionStatus(ctx context.Context, req *pb.GetSubmissionStatusRequest) (*pb.GetSubmissionStatusResponse, error) {
 	if req.SubmissionId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "submission id is required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "submission_id is required", "VALIDATION_ERROR", nil)
 	}
 
 	cacheKey := fmt.Sprintf("submission:%s", req.SubmissionId)
@@ -1174,10 +1162,9 @@ func (s *ProblemService) GetSubmissionStatus(ctx context.Context, req *pb.GetSub
 	return resp, nil
 }
 
-// get all submissions for a challenge
 func (s *ProblemService) GetChallengeSubmissions(ctx context.Context, req *pb.GetChallengeSubmissionsRequest) (*pb.GetChallengeSubmissionsResponse, error) {
 	if req.ChallengeId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id is required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge_id is required", "VALIDATION_ERROR", nil)
 	}
 
 	cacheKey := fmt.Sprintf("challenge_submissions:%s", req.ChallengeId)
@@ -1204,10 +1191,9 @@ func (s *ProblemService) GetChallengeSubmissions(ctx context.Context, req *pb.Ge
 	return resp, nil
 }
 
-// get user stats across all challenges
 func (s *ProblemService) GetUserStats(ctx context.Context, req *pb.GetUserStatsRequest) (*pb.GetUserStatsResponse, error) {
 	if req.UserId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "user id is required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "user_id is required", "VALIDATION_ERROR", nil)
 	}
 
 	cacheKey := fmt.Sprintf("user_stats:%s", req.UserId)
@@ -1234,10 +1220,9 @@ func (s *ProblemService) GetUserStats(ctx context.Context, req *pb.GetUserStatsR
 	return resp, nil
 }
 
-// get user stats for a specific challenge
 func (s *ProblemService) GetChallengeUserStats(ctx context.Context, req *pb.GetChallengeUserStatsRequest) (*pb.GetChallengeUserStatsResponse, error) {
 	if req.ChallengeId == "" || req.UserId == "" {
-		return nil, s.createGrpcError(codes.InvalidArgument, "challenge id and user id are required", "VALIDATION_ERROR", nil)
+		return nil, s.createGrpcError(codes.InvalidArgument, "challenge_id and user_id are required", "VALIDATION_ERROR", nil)
 	}
 
 	cacheKey := fmt.Sprintf("challenge_user_stats:%s:%s", req.ChallengeId, req.UserId)
@@ -1264,7 +1249,6 @@ func (s *ProblemService) GetChallengeUserStats(ctx context.Context, req *pb.GetC
 	return resp, nil
 }
 
-// generate random access code or password
 func generateAccessCode(length int) (string, error) {
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, length)
@@ -1275,4 +1259,53 @@ func generateAccessCode(length int) (string, error) {
 		b[i] = charset[v%byte(len(charset))]
 	}
 	return string(b), nil
+}
+
+// GetChallengeHistory retrieves a paginated list of challenges a user has participated in
+func (s *ProblemService) GetChallengeHistory(ctx context.Context, req *pb.GetChallengeHistoryRequest) (*pb.GetChallengeHistoryResponse, error) {
+	if req.UserId == "" {
+		return nil, s.createGrpcError(codes.InvalidArgument, "user_id is required", "VALIDATION_ERROR", nil)
+	}
+
+	// Set default pagination values
+	if req.Page < 1 {
+		req.Page = 1
+	}
+	if req.PageSize < 1 {
+		req.PageSize = 10
+	}
+
+	// Check cache
+// 	cacheKey := fmt.Sprintf("user_challenge_history:%s:%d:%d", req.UserId, req.Page, req.PageSize)
+// 	cachedChallenges, err := s.RedisCacheClient.Get(cacheKey)
+// 	if err == nil && cachedChallenges != nil {
+// 		var challenges pb.GetChallengeHistoryResponse
+// 		cachedStr, ok := cachedChallenges.(string)
+// 		if !ok {
+// 			log.Println("failed to assert cached challenge history to string")
+// 			goto fetchFromDB
+// 		}
+// 		if err := json.Unmarshal([]byte(cachedStr), &challenges); err == nil {
+// 			return &challenges, nil
+// 		}
+// 	}
+
+// fetchFromDB:
+	// Fetch from repository
+	resp, err := s.RepoConnInstance.GetChallengeHistory(ctx, req)
+	if err != nil {
+		return nil, s.createGrpcError(codes.Internal, "failed to fetch challenge history", "DB_ERROR", err)
+	}
+
+	// // Cache the response
+	// challengesBytes, err := json.Marshal(resp)
+	// if err == nil {
+	// 	if err := s.RedisCacheClient.Set(cacheKey, challengesBytes, 1*time.Hour); err != nil {
+	// 		log.Printf("failed to cache user challenge history: %v", err)
+	// 	}
+	// } else {
+	// 	log.Printf("failed to marshal challenge history response: %v", err)
+	// }
+
+	return resp, nil
 }

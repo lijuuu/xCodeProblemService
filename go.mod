@@ -5,7 +5,7 @@ go 1.24.1
 require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/joho/godotenv v1.5.1
-	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250416164339-2a48cd5067bf
+	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250423142005-863e2d196253
 	github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f
 	github.com/nats-io/nats.go v1.39.1
 	go.mongodb.org/mongo-driver v1.17.3

@@ -13,6 +13,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+
+	zap_betterstack "xcode/logger"
 )
 
 type Repository struct {
@@ -22,9 +24,11 @@ type Repository struct {
 	submissionsCollection            *mongo.Collection
 	submissionFirstSuccessCollection *mongo.Collection
 	lb                               *redisboard.Leaderboard
+
+	logger *zap_betterstack.BetterStackLogStreamer
 }
 
-func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard) *Repository {
+func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard,logger *zap_betterstack.BetterStackLogStreamer) *Repository {
 	return &Repository{
 		mongoclientInstance:              client,
 		problemsCollection:               client.Database("problems_db").Collection("problems"),
@@ -32,8 +36,11 @@ func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard) *Repository
 		challengeCollection:              client.Database("challenges_db").Collection("challenges"),
 		submissionFirstSuccessCollection: client.Database("submissions_db").Collection("submissionsfirstsuccess"),
 		lb:                               lb,
+		
+		logger: logger,
 	}
 }
+
 
 // SyncLeaderboardToRedis syncs MongoDB data to RedisBoard
 func (r *Repository) SyncLeaderboardToRedis(ctx context.Context) error {

@@ -14,6 +14,10 @@ type Config struct {
 	ProblemService string
 	NATSURL        string
 	RedisURL       string
+
+	Environment            string
+	BetterStackSourceToken string
+	BetterStackUploadURL   string
 }
 
 func LoadConfig() Config {
@@ -28,6 +32,10 @@ func LoadConfig() Config {
 		ProblemService: getEnv("PROBLEMSERVICE", "50055"),
 		NATSURL:        getEnv("NATSURL", "nats://localhost:4222"),
 		RedisURL:       getEnv("REDISURL", "localhost:6379"),
+
+		Environment:            getEnv("ENVIRONMENT", "development"),
+		BetterStackSourceToken: getEnv("BETTERSTACKSOURCETOKEN", ""),
+		BetterStackUploadURL:   getEnv("BETTERSTACKUPLOADURL", ""),
 	}
 
 	// fmt.Println(config)

@@ -21,6 +21,8 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	zap_betterstack "xcode/logger"
 )
 
 // problemservice handles problem-related operations
@@ -30,14 +32,18 @@ type ProblemService struct {
 	RedisCacheClient cache.RedisCache
 	LB               *redisboard.Leaderboard
 	pb.UnimplementedProblemsServiceServer
+	logger *zap_betterstack.BetterStackLogStreamer
+	
 }
 
-func NewService(repo repository.Repository, natsClient *natsclient.NatsClient, redisCache cache.RedisCache, lb *redisboard.Leaderboard) *ProblemService {
+func NewService(repo repository.Repository, natsClient *natsclient.NatsClient, redisCache cache.RedisCache, lb *redisboard.Leaderboard,logger *zap_betterstack.BetterStackLogStreamer) *ProblemService {
 	svc := &ProblemService{
 		RepoConnInstance: repo,
 		NatsClient:       natsClient,
 		RedisCacheClient: redisCache,
 		LB:               lb,
+		
+		logger: logger,
 	}
 	// Sync leaderboard during initialization
 	if err := svc.SyncLeaderboardFromMongo(context.Background()); err != nil {

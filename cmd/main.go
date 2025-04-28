@@ -12,9 +12,15 @@ import (
 
 	problemService "github.com/lijuuu/GlobalProtoXcode/ProblemsService"
 	redisboard "github.com/lijuuu/RedisBoard"
+	"go.uber.org/zap"
 
 	"google.golang.org/grpc"
+	zap_betterstack "xcode/logger"
 )
+
+//TODO - Use Zap_BetterStack logger  throughtout this file -add TraceID as well
+//TODO - Study and Test all the challenge endpoints and create api doc.
+//TODO - all snake cases to pascal. only use snake in database.
 
 func main() {
 
@@ -23,9 +29,29 @@ func main() {
 		log.Fatalf("Failed to create NATS client: %v", err)
 	}
 
-	configValues := configs.LoadConfig()
+	config := configs.LoadConfig()
+	
+	// Initialize Zap logger based on environment
+	var logger *zap.Logger
+	if config.Environment == "development" {
+		logger, err = zap.NewDevelopment()
+	} else {
+		logger, err = zap.NewProduction()
+	}
+	if err != nil {
+		panic("Failed to initialize Zap logger: " + err.Error())
+	}
+	defer logger.Sync()
+	
+	// Initialize BetterStackLogStreamer
+	logStreamer := zap_betterstack.NewBetterStackLogStreamer(
+		config.BetterStackSourceToken,
+		config.Environment,
+		config.BetterStackUploadURL,
+		logger,
+	)
 
-	redisCacheClient := cache.NewRedisCache(configValues.RedisURL, "", 0)
+	redisCacheClient := cache.NewRedisCache(config.RedisURL, "", 0)
 
 	mongoclientInstance := mongoconn.ConnectDB()
 
@@ -36,7 +62,7 @@ func main() {
 		MaxUsers:    1_000_000,
 		MaxEntities: 200,
 		FloatScores: true,
-		RedisAddr:   configValues.RedisURL, 
+		RedisAddr:   config.RedisURL, 
 	}
 	lb, err := redisboard.New(lbConfig)
 	if err != nil {
@@ -44,20 +70,20 @@ func main() {
 	}
 	defer lb.Close()
 
-	repoInstance := repository.NewRepository(mongoclientInstance,lb)
+	repoInstance := repository.NewRepository(mongoclientInstance,lb,logStreamer)
 
-	serviceInstance := service.NewService(*repoInstance, natsClient, *redisCacheClient,lb)
+	serviceInstance := service.NewService(*repoInstance, natsClient, *redisCacheClient,lb,logStreamer)
 
 	// Start gRPC server
-	lis, err := net.Listen("tcp", ":"+configValues.ProblemService)
+	lis, err := net.Listen("tcp", ":"+config.ProblemService)
 	if err != nil {
-		log.Fatalf("Failed to listen on port %s: %v", configValues.ProblemService, err)
+		log.Fatalf("Failed to listen on port %s: %v", config.ProblemService, err)
 	}
 
 	grpcServer := grpc.NewServer()
 	problemService.RegisterProblemsServiceServer(grpcServer, serviceInstance)
 
-	log.Printf("ProblemService gRPC server running on port %s", configValues.ProblemService) //50055
+	log.Printf("ProblemService gRPC server running on port %s", config.ProblemService) //50055
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("Failed to serve gRPC server: %v", err)
 	}

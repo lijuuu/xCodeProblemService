@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"log"
 	"time"
 	"xcode/model"
 
@@ -13,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.uber.org/zap/zapcore"
 
 	zap_betterstack "xcode/logger"
 )
@@ -28,7 +28,7 @@ type Repository struct {
 	logger *zap_betterstack.BetterStackLogStreamer
 }
 
-func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard,logger *zap_betterstack.BetterStackLogStreamer) *Repository {
+func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard, logger *zap_betterstack.BetterStackLogStreamer) *Repository {
 	return &Repository{
 		mongoclientInstance:              client,
 		problemsCollection:               client.Database("problems_db").Collection("problems"),
@@ -36,17 +36,16 @@ func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard,logger *zap_
 		challengeCollection:              client.Database("challenges_db").Collection("challenges"),
 		submissionFirstSuccessCollection: client.Database("submissions_db").Collection("submissionsfirstsuccess"),
 		lb:                               lb,
-		
+
 		logger: logger,
 	}
 }
-
 
 // SyncLeaderboardToRedis syncs MongoDB data to RedisBoard
 func (r *Repository) SyncLeaderboardToRedis(ctx context.Context) error {
 
 	syncStartTime := time.Now()
-	log.Printf("SYNCING MONGODB TO REDISBOARD")
+	r.logger.Log(zapcore.InfoLevel, "REDIBOARDSYNC", "Syncing Leaderboard to Redis started", nil, "REPOSITORY", nil)
 
 	pipeline := mongo.Pipeline{
 		// Sort by SubmittedAt to ensure consistent country selection
@@ -87,7 +86,9 @@ func (r *Repository) SyncLeaderboardToRedis(ctx context.Context) error {
 		}
 	}
 
-	log.Printf("SYNC TOOK  ", time.Since(syncStartTime))
+	r.logger.Log(zapcore.InfoLevel, "REDIBOARDSYNC", "Syncing Leaderboard to Redis Finished", map[string]any{
+		"duration": time.Since(syncStartTime),
+	}, "REPOSITORY", nil)
 
 	return cursor.Err()
 }

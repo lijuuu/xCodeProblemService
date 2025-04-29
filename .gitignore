@@ -4,3 +4,4 @@
 gin.log
 app.log
 *.log
+.vscode/settings.json

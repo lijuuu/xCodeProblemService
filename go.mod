@@ -4,6 +4,7 @@ go 1.24.1
 
 require (
 	github.com/go-redis/redis/v8 v8.11.5
+	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250428131521-17adf83fbed2
 	github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f

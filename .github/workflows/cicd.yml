@@ -17,7 +17,7 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.0
         with:
           slack-bot-token: ${{ secrets.SLACK_WEBHOOK_URL }}
-          channel-id: 'ci-cd-notifications'  
+          channel-id: 'ci-cd-notifications'  # Replace with your Slack channel name
           payload: |
             {
               "blocks": [
@@ -85,7 +85,7 @@ jobs:
         run: |
           GOOS=linux GOARCH=amd64 go build -o problemchallengeservice ./cmd
 
-      # Step 7: Upload binary and restart service on EC2
+      # Step 7: Upload binary, copy .env, and restart service on EC2
       - name: Deploy to EC2
         env:
           SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
@@ -95,11 +95,14 @@ jobs:
           chmod 600 ssh_key.pem
           scp -o StrictHostKeyChecking=no -i ssh_key.pem problemchallengeservice ubuntu@$EC2_HOST:/tmp/problemchallengeservice
           ssh -o StrictHostKeyChecking=no -i ssh_key.pem ubuntu@$EC2_HOST '
-            sudo systemctl stop problemchallengeservice.service || true &&
+            sudo systemctl stop problemchallenge.service || true &&
             sudo mv /tmp/problemchallengeservice /usr/local/bin/problemchallengeservice &&
             sudo chmod +x /usr/local/bin/problemchallengeservice &&
-            sudo systemctl restart problemchallengeservice.service &&
-            sudo systemctl status problemchallengeservice.service
+            [ -f /home/ubuntu/.env ] && sudo cp /home/ubuntu/.env /usr/local/bin/.env || echo "Warning: /home/ubuntu/.env not found" &&
+            sudo chmod 600 /usr/local/bin/.env &&
+            sudo chown ubuntu:ubuntu /usr/local/bin/.env &&
+            sudo systemctl restart problemchallenge.service &&
+            sudo systemctl status problemchallenge.service
           '
           rm -f ssh_key.pem
 
@@ -109,7 +112,7 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.0
         with:
           slack-bot-token: ${{ secrets.SLACK_WEBHOOK_URL }}
-          channel-id: 'ci-cd-notifications'  
+          channel-id: 'ci-cd-notifications'  # Replace with your Slack channel name
           payload: |
             {
               "blocks": [
@@ -160,7 +163,7 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.0
         with:
           slack-bot-token: ${{ secrets.SLACK_WEBHOOK_URL }}
-          channel-id: 'ci-cd-notifications'  
+          channel-id: 'ci-cd-notifications'  # Replace with your Slack channel name
           payload: |
             {
               "blocks": [

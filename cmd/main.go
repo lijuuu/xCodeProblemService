@@ -18,9 +18,9 @@ import (
 	zap_betterstack "xcode/logger"
 )
 
-//TODO - Use Zap_BetterStack logger  throughtout this file -add TraceID as well
+// TODO - Use Zap_BetterStack logger  throughtout this file -add TraceID as well --partiallydone, avoiding repo layer to reduce amount of logs
 //TODO - Study and Test all the challenge endpoints and create api doc.
-//TODO - all snake cases to pascal. only use snake in database.
+//TODO - psql -snakecase, mongodb - camelcase, fields - pascalcase.
 
 func main() {
 

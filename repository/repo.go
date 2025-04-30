@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 	"xcode/model"
 
@@ -101,6 +102,7 @@ func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.S
 
 	// Count successful submissions for the problem
 	SuccessCount, err := r.submissionsCollection.CountDocuments(ctx, bson.M{
+		"userID":submission.UserID,
 		"problemId": submission.ProblemID,
 		"status":    "SUCCESS",
 	})
@@ -1359,6 +1361,9 @@ func (r *Repository) GetPublicChallenges(ctx context.Context, req *pb.GetPublicC
 	pbChallenges := make([]*pb.Challenge, len(challenges))
 	for i, c := range challenges {
 		pbChallenges[i] = ToPBChallenge(c)
+		pbChallenges[i].ProblemIds = nil
+		pbChallenges[i].ParticipantIds = nil
+		pbChallenges[i].UserProblemMetadata = nil
 	}
 
 	return &pb.GetPublicChallengesResponse{
@@ -1389,14 +1394,12 @@ func (r *Repository) JoinChallenge(ctx context.Context, req *pb.JoinChallengeReq
 		}, nil
 	}
 
-	for _, pid := range challenge.ParticipantIDs {
-		if pid == req.UserId {
-			return &pb.JoinChallengeResponse{
-				ChallengeId: req.ChallengeId,
-				Success:     true,
-				Message:     "Already joined",
-			}, nil
-		}
+	if slices.Contains(challenge.ParticipantIDs, req.UserId) {
+		return &pb.JoinChallengeResponse{
+			ChallengeId: req.ChallengeId,
+			Success:     true,
+			Message:     "Already joined",
+		}, nil
 	}
 
 	update := bson.M{

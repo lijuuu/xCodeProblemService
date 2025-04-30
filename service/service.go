@@ -683,7 +683,7 @@ func (s *ProblemService) GetLanguageSupports(ctx context.Context, req *pb.GetLan
 		var langs pb.GetLanguageSupportsResponse
 		cachedStr, ok := cachedLangs.(string)
 		if !ok {
-			s.logger.Log(zapcore.ErrorLevel,traceID, "Failed to assert cached languages to string", map[string]any{
+			s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to assert cached languages to string", map[string]any{
 				"method":    "GetLanguageSupports",
 				"cacheKey":  cacheKey,
 				"errorType": "CACHE_ERROR",
@@ -803,7 +803,7 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 			}, s.createGrpcError(codes.Internal, "Execution error", "EXECUTION_ERROR", err)
 		}
 
-		var result map[string]interface{}
+		var result map[string]any
 		if err := json.Unmarshal([]byte(res.Message), &result); err != nil {
 			s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to parse execution result", map[string]any{
 				"method":    "FullValidationByProblemID",
@@ -937,7 +937,7 @@ func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, 
 			"userId":    req.UserId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 5*time.Minute); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 1*time.Minute); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache submissions", map[string]any{
 			"method":    "GetSubmissionsByOptionalProblemID",
 			"cacheKey":  cacheKey,
@@ -1185,7 +1185,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 	}
 	tmpl = strings.Replace(tmpl, "{FUNCTION_PLACEHOLDER}", req.UserCode, 1)
 
-	compilerRequest := map[string]interface{}{
+	compilerRequest := map[string]any{
 		"code":     tmpl,
 		"language": req.Language,
 	}
@@ -1216,7 +1216,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		}, nil
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal(msg.Data, &result); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to parse execution result", map[string]any{
 			"method":    "RunUserCodeProblem",
@@ -1784,6 +1784,7 @@ func (s *ProblemService) GetLeaderboardData(ctx context.Context, req *pb.GetLead
 	}, "SERVICE", nil)
 
 	startMongo := time.Now()
+
 	mongoData, err := s.RepoConnInstance.GetLeaderboardDataMongo(ctx, req.UserId)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
@@ -2071,7 +2072,7 @@ func (s *ProblemService) GetPublicChallenges(ctx context.Context, req *pb.GetPub
 			"method":    "GetPublicChallenges",
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, challengesBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, challengesBytes, 1*time.Minute); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache public challenges", map[string]any{
 			"method":    "GetPublicChallenges",
 			"cacheKey":  cacheKey,

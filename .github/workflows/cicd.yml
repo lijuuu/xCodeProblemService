@@ -59,7 +59,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i ssh_key.pem ubuntu@$EC2_HOST << EOF
             # Log in to Docker Hub on EC2
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-            
+
             # Stop and remove any existing container
             docker stop problemchallengeservice || true
             docker rm problemchallengeservice || true
@@ -67,8 +67,8 @@ jobs:
             # Pull the latest Docker image
             docker pull lijuthomas/problemchallengeservice:latest
 
-            # Run the Docker container with required environment variables
+            # Run the Docker container with dynamically mapped .env file
             docker run -d --name problemchallengeservice -p 50055:50055 \
-              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v $(pwd)/.env:/app/.env \
               lijuthomas/problemchallengeservice:latest
           EOF

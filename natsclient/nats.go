@@ -1,6 +1,7 @@
 package natsclient
 
 import (
+	"log"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -15,6 +16,7 @@ func NewNatsClient(natsURL string) (*NatsClient, error) {
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("connected to nats ,%s ",natsURL)
 	return &NatsClient{Conn: nc}, nil
 }
 

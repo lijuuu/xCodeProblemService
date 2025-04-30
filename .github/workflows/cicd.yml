@@ -78,7 +78,7 @@ jobs:
               lijuthomas/problemchallengeservice:latest
 
             #Log
-            sleep 2
+            sleep 5
             docker logs problemchallengeservice
 
           EOF

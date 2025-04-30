@@ -1753,7 +1753,7 @@ func ToPBChallenge(c model.Challenge) *pb.Challenge {
 		CreatorId:           c.CreatorID,
 		Difficulty:          c.Difficulty,
 		IsPrivate:           c.IsPrivate,
-		Password:            c.Password,
+		Password:            &c.Password,
 		ProblemIds:          c.ProblemIDs,
 		TimeLimit:           c.TimeLimit,
 		CreatedAt:           c.CreatedAt,

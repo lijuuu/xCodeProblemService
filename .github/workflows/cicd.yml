@@ -67,11 +67,18 @@ jobs:
             # Pull the latest Docker image
             docker pull lijuthomas/problemchallengeservice:latest
 
+            # Log the current directory again after pulling the image (optional)
+            echo "Current working directory after pulling Docker image:"
+            pwd
+
+
             # Run the Docker container with dynamically mapped .env file
             docker run -d --name problemchallengeservice -p 50055:50055 \
               -v $(pwd)/.env:/app/.env \
               lijuthomas/problemchallengeservice:latest
 
             #Log
+            sleep 2
             docker logs problemchallengeservice
+
           EOF

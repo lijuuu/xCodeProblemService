@@ -71,4 +71,7 @@ jobs:
             docker run -d --name problemchallengeservice -p 50055:50055 \
               -v $(pwd)/.env:/app/.env \
               lijuthomas/problemchallengeservice:latest
+
+            #Log
+            docker logs problemchallengeservice
           EOF

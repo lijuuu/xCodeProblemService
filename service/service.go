@@ -297,7 +297,7 @@ func (s *ProblemService) GetProblem(ctx context.Context, req *pb.GetProblemReque
 			"problemId": req.ProblemId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, problemBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, problemBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache problem", map[string]any{
 			"method":    "GetProblem",
 			"cacheKey":  cacheKey,
@@ -369,7 +369,7 @@ func (s *ProblemService) ListProblems(ctx context.Context, req *pb.ListProblemsR
 			"pageSize":  req.PageSize,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, problemsBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, problemsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache problems list", map[string]any{
 			"method":    "ListProblems",
 			"cacheKey":  cacheKey,
@@ -715,7 +715,7 @@ func (s *ProblemService) GetLanguageSupports(ctx context.Context, req *pb.GetLan
 			"problemId": req.ProblemId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, langsBytes, 30*time.Minute); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, langsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache language supports", map[string]any{
 			"method":    "GetLanguageSupports",
 			"cacheKey":  cacheKey,
@@ -937,7 +937,7 @@ func (s *ProblemService) GetSubmissionsByOptionalProblemID(ctx context.Context, 
 			"userId":    req.UserId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 1*time.Minute); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache submissions", map[string]any{
 			"method":    "GetSubmissionsByOptionalProblemID",
 			"cacheKey":  cacheKey,
@@ -1015,7 +1015,7 @@ func (s *ProblemService) GetProblemByIDSlug(ctx context.Context, req *pb.GetProb
 			"slug":      req.Slug,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, problemBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, problemBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache problem", map[string]any{
 			"method":    "GetProblemByIDSlug",
 			"cacheKey":  cacheKey,
@@ -1088,7 +1088,7 @@ func (s *ProblemService) GetProblemMetadataList(ctx context.Context, req *pb.Get
 			"pageSize":  req.PageSize,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, problemsBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, problemsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache problem metadata list", map[string]any{
 			"method":    "GetProblemMetadataList",
 			"cacheKey":  cacheKey,
@@ -1431,7 +1431,7 @@ func (s *ProblemService) GetProblemsDoneStatistics(ctx context.Context, req *pb.
 			"userId":    req.UserId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache problem stats", map[string]any{
 			"method":    "GetProblemsDoneStatistics",
 			"cacheKey":  cacheKey,
@@ -2007,7 +2007,7 @@ func (s *ProblemService) GetChallengeDetails(ctx context.Context, req *pb.GetCha
 			"challengeId": req.Id,
 			"errorType":   "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, detailsBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, detailsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache challenge details", map[string]any{
 			"method":      "GetChallengeDetails",
 			"challengeId": req.Id,
@@ -2298,7 +2298,7 @@ func (s *ProblemService) GetSubmissionStatus(ctx context.Context, req *pb.GetSub
 			"submissionId": req.SubmissionId,
 			"errorType":    "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, submissionBytes, 30*time.Minute); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, submissionBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache submission", map[string]any{
 			"method":       "GetSubmissionStatus",
 			"submissionId": req.SubmissionId,
@@ -2363,7 +2363,7 @@ func (s *ProblemService) GetChallengeSubmissions(ctx context.Context, req *pb.Ge
 			"challengeId": req.ChallengeId,
 			"errorType":   "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 30*time.Minute); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, submissionsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache challenge submissions", map[string]any{
 			"method":      "GetChallengeSubmissions",
 			"challengeId": req.ChallengeId,
@@ -2428,7 +2428,7 @@ func (s *ProblemService) GetUserStats(ctx context.Context, req *pb.GetUserStatsR
 			"userId":    req.UserId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache user stats", map[string]any{
 			"method":    "GetUserStats",
 			"userId":    req.UserId,
@@ -2497,7 +2497,7 @@ func (s *ProblemService) GetChallengeUserStats(ctx context.Context, req *pb.GetC
 			"userId":      req.UserId,
 			"errorType":   "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, statsBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache challenge user stats", map[string]any{
 			"method":      "GetChallengeUserStats",
 			"challengeId": req.ChallengeId,
@@ -2586,7 +2586,7 @@ func (s *ProblemService) GetChallengeHistory(ctx context.Context, req *pb.GetCha
 			"userId":    req.UserId,
 			"errorType": "MARSHAL_ERROR",
 		}, "SERVICE", err)
-	} else if err := s.RedisCacheClient.Set(cacheKey, challengesBytes, 1*time.Hour); err != nil {
+	} else if err := s.RedisCacheClient.Set(cacheKey, challengesBytes, 5*time.Second); err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to cache challenge history", map[string]any{
 			"method":    "GetChallengeHistory",
 			"userId":    req.UserId,

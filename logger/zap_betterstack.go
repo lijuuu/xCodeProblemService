@@ -46,24 +46,24 @@ func NewBetterStackLogStreamer(sourceToken, environment, uploadURL string, logge
 		logger:      logger,
 	}
 
-	// Initialize file writer for development
 	if environment == "development" {
-		f, err := os.OpenFile("app.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		const logPath = "/var/log/service/app.log"
+		f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			logger.Error("Failed to open log file", zap.Error(err))
+			logger.Error("Failed to open log file", zap.String("path", logPath), zap.Error(err))
 			streamer.fileWriter = os.Stderr
 		} else {
 			streamer.fileWriter = f
 		}
 	}
 
-	// Initialize HTTP client for production
 	if environment == "production" {
 		streamer.client = &http.Client{Timeout: 10 * time.Second}
 	}
 
 	return streamer
 }
+
 
 // Log streams a service-level log to a file (development) or Better Stack (production)
 func (s *BetterStackLogStreamer) Log(level zapcore.Level, traceID string, message string, attributes map[string]any, layer string, err error) {

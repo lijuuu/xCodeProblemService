@@ -17,7 +17,7 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.0
         with:
           slack-bot-token: ${{ secrets.SLACK_WEBHOOK_URL }}
-          channel-id: 'ci-cd-notifications'  # Replace with your Slack channel name
+          channel-id: "ci-cd-notifications" # Replace with your Slack channel name
           payload: |
             {
               "blocks": [
@@ -101,6 +101,12 @@ jobs:
             [ -f /home/ubuntu/.env ] && sudo cp /home/ubuntu/.env /usr/local/bin/.env || echo "Warning: /home/ubuntu/.env not found" &&
             sudo chmod 600 /usr/local/bin/.env &&
             sudo chown ubuntu:ubuntu /usr/local/bin/.env &&
+
+            sudo mkdir -p /var/log/service &&
+            sudo touch /var/log/service/problemchallengeservice.log &&
+            sudo chown ubuntu:ubuntu /var/log/service/problemchallengeservice.log &&
+            sudo chmod 664 /var/log/service/problemchallengeservice.log &&
+
             sudo systemctl restart problemchallenge.service &&
             sudo systemctl status problemchallenge.service
           '
@@ -112,7 +118,7 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.0
         with:
           slack-bot-token: ${{ secrets.SLACK_WEBHOOK_URL }}
-          channel-id: 'ci-cd-notifications'  # Replace with your Slack channel name
+          channel-id: "ci-cd-notifications" # Replace with your Slack channel name
           payload: |
             {
               "blocks": [
@@ -163,7 +169,7 @@ jobs:
         uses: slackapi/slack-github-action@v1.27.0
         with:
           slack-bot-token: ${{ secrets.SLACK_WEBHOOK_URL }}
-          channel-id: 'ci-cd-notifications'  # Replace with your Slack channel name
+          channel-id: "ci-cd-notifications" # Replace with your Slack channel name
           payload: |
             {
               "blocks": [

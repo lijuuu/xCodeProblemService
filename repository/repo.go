@@ -102,7 +102,7 @@ func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.S
 
 	// Count successful submissions for the problem
 	SuccessCount, err := r.submissionsCollection.CountDocuments(ctx, bson.M{
-		"userID":submission.UserID,
+		"userId":    submission.UserID,
 		"problemId": submission.ProblemID,
 		"status":    "SUCCESS",
 	})

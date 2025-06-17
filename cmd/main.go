@@ -58,7 +58,7 @@ func main() {
 
 	// Initialize RedisBoard Leaderboard
 	lbConfig := redisboard.Config{
-		Namespace:   "problems_leaderboard",
+		Namespace:   "user_Leaderboard_Unique", // namespace must be unique; avoid using similar prefixes in other parts of Redis, as this may lead to accidental key deletion when ForceClear is called
 		K:           10,
 		MaxUsers:    1_000_000,
 		MaxEntities: 200,

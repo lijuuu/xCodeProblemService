@@ -39,7 +39,6 @@ type ProblemService struct {
 }
 
 func NewService(repo repository.Repository, natsClient *natsclient.NatsClient, redisCache cache.RedisCache, lb *redisboard.Leaderboard, logger *zap_betterstack.BetterStackLogStreamer) *ProblemService {
-	traceID := uuid.New().String()
 	svc := &ProblemService{
 		RepoConnInstance: repo,
 		NatsClient:       natsClient,
@@ -47,25 +46,24 @@ func NewService(repo repository.Repository, natsClient *natsclient.NatsClient, r
 		LB:               lb,
 		logger:           logger,
 	}
-	// Sync leaderboard during initialization
-	if err := svc.SyncLeaderboardFromMongo(context.Background()); err != nil {
-		svc.logger.Log(zapcore.ErrorLevel, traceID, "Failed to sync leaderboard during service initialization", map[string]any{
-			"method":    "NewService",
-			"errorType": "LEADERBOARD_SYNC_FAILED",
-		}, "SERVICE", err)
-	}
-	svc.logger.Log(zapcore.InfoLevel, traceID, "ProblemService initialized", map[string]any{
-		"method": "NewService",
-	}, "SERVICE", nil)
+
 	return svc
 }
 
 func (s *ProblemService) SyncLeaderboardFromMongo(ctx context.Context) error {
 	traceID := uuid.New().String()
-	s.logger.Log(zapcore.InfoLevel, traceID, "Starting SyncLeaderboardFromMongo", map[string]any{
+
+	//force clear redis leaderboard cache
+	s.logger.Log(zapcore.InfoLevel, traceID, "Starting ForceClearLeaderBoardWithNamespacePrefix", map[string]any{
 		"method": "SyncLeaderboardFromMongo",
 	}, "SERVICE", nil)
+	clearTime := time.Now()
+	s.LB.ForceClearLeaderBoardWithNamespacePrefix()
 
+	s.logger.Log(zapcore.InfoLevel, traceID, "Starting SyncLeaderboardFromMongo", map[string]any{
+		"method":   "SyncLeaderboardFromMongo",
+		"duration": time.Since(clearTime).Seconds(),
+	}, "SERVICE", nil)
 	err := s.RepoConnInstance.SyncLeaderboardToRedis(ctx)
 	if err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to sync leaderboard to Redis", map[string]any{
@@ -85,15 +83,26 @@ func (s *ProblemService) StartCronJob() {
 	c := cron.New()
 
 	// schedule leaderboard sync every hour
-	c.AddFunc("@every 1h", func() {
+	c.AddFunc("@every 1min", func() {
 		ctx := context.Background()
 		s.logger.Log(zapcore.InfoLevel, "", "Syncing MongoDB Submissions and RedisBoard "+time.Now().String(), map[string]any{
 			"method": "SYNC LEADERBOARD CRON JOB",
 		}, "SERVICE", nil)
+
 		s.SyncLeaderboardFromMongo(ctx)
 	})
 
-	c.Start() // ⚠️ this does NOT block
+	// manually trigger once now
+	go func() {
+		ctx := context.Background()
+		s.logger.Log(zapcore.InfoLevel, "", "Initial sync before cron starts "+time.Now().String(), map[string]any{
+			"method": "INITIAL SYNC",
+		}, "SERVICE", nil)
+
+		s.SyncLeaderboardFromMongo(ctx)
+	}()
+
+	c.Start()
 }
 
 // GetService returns the ProblemService instance

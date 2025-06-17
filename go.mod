@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
 	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617033802-3e75143397ea
-	github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f
+	github.com/lijuuu/RedisBoard v0.0.0-20250617061554-f5fae0021242
 	github.com/nats-io/nats.go v1.39.1
 	github.com/robfig/cron/v3 v3.0.1
 	go.mongodb.org/mongo-driver v1.17.3

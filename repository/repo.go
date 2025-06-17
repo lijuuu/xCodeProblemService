@@ -88,7 +88,7 @@ func (r *Repository) SyncLeaderboardToRedis(ctx context.Context) error {
 	}
 
 	r.logger.Log(zapcore.InfoLevel, "REDIBOARDSYNC", "Syncing Leaderboard to Redis Finished", map[string]any{
-		"duration": time.Since(syncStartTime),
+		"duration": time.Since(syncStartTime).Seconds(),
 	}, "REPOSITORY", nil)
 
 	return cursor.Err()

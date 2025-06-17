@@ -32,6 +32,8 @@ github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617033802-3e75143397ea h1:9lbhVjt
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617033802-3e75143397ea/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
 github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f h1:/fpeGrGBnnM2LsKHOur3FkCZ+doc4XLeLR37cQ4FbUM=
 github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f/go.mod h1:wXEeA+Z6PmIJwu0lPBz0AbejQMtKjk4vvIxkUpd49h0=
+github.com/lijuuu/RedisBoard v0.0.0-20250617061554-f5fae0021242 h1:sUGSb3/1R7M5BcN12Vvkfx+iSM6+XHowGN27Arzw81g=
+github.com/lijuuu/RedisBoard v0.0.0-20250617061554-f5fae0021242/go.mod h1:wXEeA+Z6PmIJwu0lPBz0AbejQMtKjk4vvIxkUpd49h0=
 github.com/montanaflynn/stats v0.7.1 h1:etflOAAHORrCC44V+aR6Ftzort912ZU+YLiSTuV8eaE=
 github.com/montanaflynn/stats v0.7.1/go.mod h1:etXPPgVO6n31NxCd9KQUMvCM+ve0ruNzt6R8Bnaayow=
 github.com/nats-io/nats.go v1.39.1 h1:oTkfKBmz7W047vRxV762M67ZdXeOtUgvbBaNoQ+3PPk=

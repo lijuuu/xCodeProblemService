@@ -14,11 +14,12 @@ import (
 	redisboard "github.com/lijuuu/RedisBoard"
 	"go.uber.org/zap"
 
-	"google.golang.org/grpc"
 	zap_betterstack "xcode/logger"
+
+	"google.golang.org/grpc"
 )
 
-// TODO - Use Zap_BetterStack logger  throughtout this file -add TraceID as well --partiallydone, avoiding repo layer to reduce amount of logs
+//TODO - Use Zap_BetterStack logger  throughtout this file -add TraceID as well --partiallydone, avoiding repo layer to reduce amount of logs
 //TODO - Study and Test all the challenge endpoints and create api doc.
 //TODO - psql -snakecase, mongodb - camelcase, fields - pascalcase.
 
@@ -30,7 +31,7 @@ func main() {
 	}
 
 	config := configs.LoadConfig()
-	
+
 	// Initialize Zap logger based on environment
 	var logger *zap.Logger
 	if config.Environment == "development" {
@@ -42,7 +43,7 @@ func main() {
 		panic("Failed to initialize Zap logger: " + err.Error())
 	}
 	defer logger.Sync()
-	
+
 	// Initialize BetterStackLogStreamer
 	logStreamer := zap_betterstack.NewBetterStackLogStreamer(
 		config.BetterStackSourceToken,
@@ -62,7 +63,7 @@ func main() {
 		MaxUsers:    1_000_000,
 		MaxEntities: 200,
 		FloatScores: true,
-		RedisAddr:   config.RedisURL, 
+		RedisAddr:   config.RedisURL,
 	}
 	lb, err := redisboard.New(lbConfig)
 	if err != nil {
@@ -70,9 +71,11 @@ func main() {
 	}
 	defer lb.Close()
 
-	repoInstance := repository.NewRepository(mongoclientInstance,lb,logStreamer)
+	repoInstance := repository.NewRepository(mongoclientInstance, lb, logStreamer)
 
-	serviceInstance := service.NewService(*repoInstance, natsClient, *redisCacheClient,lb,logStreamer)
+	serviceInstance := service.NewService(*repoInstance, natsClient, *redisCacheClient, lb, logStreamer)
+
+	serviceInstance.StartCronJob() //NON Blocking cron for periodically syncing leaderboards.
 
 	// Start gRPC server
 	lis, err := net.Listen("tcp", ":"+config.ProblemService)

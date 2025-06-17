@@ -16,6 +16,7 @@ import (
 
 	pb "github.com/lijuuu/GlobalProtoXcode/ProblemsService"
 	redisboard "github.com/lijuuu/RedisBoard"
+	cron "github.com/robfig/cron/v3"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.uber.org/zap/zapcore"
@@ -78,6 +79,21 @@ func (s *ProblemService) SyncLeaderboardFromMongo(ctx context.Context) error {
 		"method": "SyncLeaderboardFromMongo",
 	}, "SERVICE", nil)
 	return nil
+}
+
+func (s *ProblemService) StartCronJob() {
+	c := cron.New()
+
+	// schedule leaderboard sync every hour
+	c.AddFunc("@every 1h", func() {
+		ctx := context.Background()
+		s.logger.Log(zapcore.InfoLevel, "", "Syncing MongoDB Submissions and RedisBoard "+time.Now().String(), map[string]any{
+			"method": "SYNC LEADERBOARD CRON JOB",
+		}, "SERVICE", nil)
+		s.SyncLeaderboardFromMongo(ctx)
+	})
+
+	c.Start() // ⚠️ this does NOT block
 }
 
 // GetService returns the ProblemService instance
@@ -765,6 +781,8 @@ func (s *ProblemService) FullValidationByProblemID(ctx context.Context, req *pb.
 		return data, s.createGrpcError(codes.Unimplemented, errMsg, data.ErrorType, err)
 	}
 
+	// fmt.Println("supported problems ", problem.ValidateCode)
+	// fmt.Println("length and content of supported languages ",len(problem.SupportedLanguages),problem.SupportedLanguages )
 	for _, lang := range problem.SupportedLanguages {
 		validateCode, ok := problem.ValidateCode[lang]
 		if !ok {
@@ -1199,7 +1217,7 @@ func (s *ProblemService) RunUserCodeProblem(ctx context.Context, req *pb.RunProb
 		return nil, fmt.Errorf("failed to serialize compiler request: %w", err)
 	}
 
-	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 3*time.Second)
+	msg, err := s.NatsClient.Request("problems.execute.request", compilerRequestBytes, 10*time.Second)
 	if err != nil {
 		s.logger.Log(zapcore.ErrorLevel, traceID, "Failed to execute code", map[string]any{
 			"method":    "RunUserCodeProblem",
@@ -2602,4 +2620,10 @@ func (s *ProblemService) GetChallengeHistory(ctx context.Context, req *pb.GetCha
 		"pageSize": req.PageSize,
 	}, "SERVICE", nil)
 	return resp, nil
+}
+
+func (s *ProblemService) ForceChangeUserEntityInSubmission(ctx context.Context, req *pb.ForceChangeUserEntityInSubmissionRequest) (*pb.ForceChangeUserEntityInSubmissionResponse, error) {
+	s.LB.UpdateEntityByUserID(req.UserId, req.Entity)
+	s.RepoConnInstance.ForceChangeUserCountryInSubmission(ctx, req)
+	return &pb.ForceChangeUserEntityInSubmissionResponse{}, nil
 }

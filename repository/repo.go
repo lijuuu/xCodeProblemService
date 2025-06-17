@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 	"xcode/model"
 
@@ -37,7 +38,6 @@ func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard, logger *zap
 		challengeCollection:              client.Database("challenges_db").Collection("challenges"),
 		submissionFirstSuccessCollection: client.Database("submissions_db").Collection("submissionsfirstsuccess"),
 		lb:                               lb,
-
 		logger: logger,
 	}
 }
@@ -99,6 +99,8 @@ func (r *Repository) PushSubmissionData(ctx context.Context, submission *model.S
 	if r == nil || submission == nil {
 		return fmt.Errorf("repository or submission is nil")
 	}
+
+	submission.Country = strings.ToUpper(submission.Country)
 
 	// Count successful submissions for the problem
 	SuccessCount, err := r.submissionsCollection.CountDocuments(ctx, bson.M{
@@ -1848,4 +1850,24 @@ func (r *Repository) GetChallengeHistory(ctx context.Context, req *pb.GetChallen
 		Page:       req.Page,
 		PageSize:   req.PageSize,
 	}, nil
+}
+
+func (r *Repository) ForceChangeUserCountryInSubmission(ctx context.Context, req *pb.ForceChangeUserEntityInSubmissionRequest) {
+	newEntity := strings.ToUpper(req.Entity)
+
+	filter := bson.M{"userId": req.UserId}
+	update := bson.M{
+		"$set": bson.M{
+			"country": newEntity,
+		},
+	}
+
+	const maxRetries = 3
+	for i := 0; i < maxRetries; i++ {
+		_, err := r.submissionFirstSuccessCollection.UpdateMany(ctx, filter, update)
+		if err == nil {
+			return
+		}
+		time.Sleep(time.Millisecond * 50) // simple backoff
+	}
 }

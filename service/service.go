@@ -340,6 +340,7 @@ func (s *ProblemService) GetProblem(ctx context.Context, req *pb.GetProblemReque
 // ListProblems retrieves a paginated list of problems
 func (s *ProblemService) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
 	traceID := uuid.New().String()
+
 	s.logger.Log(zapcore.InfoLevel, traceID, "Starting ListProblems", map[string]any{
 		"method":   "ListProblems",
 		"page":     req.Page,

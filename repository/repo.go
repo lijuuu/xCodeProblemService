@@ -38,7 +38,7 @@ func NewRepository(client *mongo.Client, lb *redisboard.Leaderboard, logger *zap
 		challengeCollection:              client.Database("challenges_db").Collection("challenges"),
 		submissionFirstSuccessCollection: client.Database("submissions_db").Collection("submissionsfirstsuccess"),
 		lb:                               lb,
-		logger: logger,
+		logger:                           logger,
 	}
 }
 
@@ -386,7 +386,7 @@ func (r *Repository) UpdateProblem(ctx context.Context, req *pb.UpdateProblemReq
 		return nil, err
 	}
 	update := bson.M{"$set": bson.M{"updated_at": time.Now()}}
-	resetValidation := false
+	// resetValidation := false
 	if req.Title != nil {
 		if *req.Title == "" {
 			return &pb.UpdateProblemResponse{Success: false, Message: "Title cannot be empty"}, nil
@@ -399,29 +399,29 @@ func (r *Repository) UpdateProblem(ctx context.Context, req *pb.UpdateProblemReq
 			return &pb.UpdateProblemResponse{Success: false, Message: "Another problem with this title already exists"}, nil
 		}
 		update["$set"].(bson.M)["title"] = *req.Title
-		resetValidation = true
+		// resetValidation = true
 	}
 	if req.Description != nil {
 		if *req.Description == "" {
 			return &pb.UpdateProblemResponse{Success: false, Message: "Description cannot be empty"}, nil
 		}
 		update["$set"].(bson.M)["description"] = *req.Description
-		resetValidation = true
+		// resetValidation = true
 	}
 	if len(req.Tags) > 0 {
 		update["$set"].(bson.M)["tags"] = req.Tags
-		resetValidation = true
+		// resetValidation = true
 	}
 	if req.Difficulty != nil {
 		if *req.Difficulty == "" {
 			return &pb.UpdateProblemResponse{Success: false, Message: "Difficulty cannot be empty"}, nil
 		}
 		update["$set"].(bson.M)["difficulty"] = *req.Difficulty
-		resetValidation = true
+		// resetValidation = true
 	}
-	if resetValidation {
-		update["$set"].(bson.M)["validated"] = false
-	}
+
+	update["$set"].(bson.M)["visible"] = *req.Visible
+
 	result, err := r.problemsCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
 	if err != nil {
 		return nil, err
@@ -466,6 +466,8 @@ func (r *Repository) GetProblem(ctx context.Context, req *pb.GetProblemRequest) 
 }
 
 func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsRequest) (*pb.ListProblemsResponse, error) {
+	fmt.Println("list problems", req)
+
 	filter := bson.M{"deleted_at": nil}
 	if len(req.Tags) > 0 {
 		filter["tags"] = bson.M{"$all": req.Tags}
@@ -479,6 +481,9 @@ func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsReque
 			{"description": bson.M{"$regex": req.SearchQuery, "$options": "i"}},
 		}
 	}
+
+
+
 	opts := options.Find().SetSkip(int64(req.Page-1) * int64(req.PageSize)).SetLimit(int64(req.PageSize))
 	cursor, err := r.problemsCollection.Find(ctx, filter, opts)
 	if err != nil {
@@ -908,7 +913,10 @@ func (r *Repository) GetProblemByIDSlug(ctx context.Context, req *pb.GetProblemB
 }
 
 func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemMetadataListRequest) (*pb.GetProblemMetadataListResponse, error) {
-	filter := bson.M{"deleted_at": nil}
+	filter := bson.M{
+		"deleted_at": nil,
+		"visible":    true,
+	}
 	if len(req.Tags) > 0 {
 		filter["tags"] = bson.M{"$all": req.Tags}
 	}
@@ -921,6 +929,7 @@ func (r *Repository) GetProblemByIDList(ctx context.Context, req *pb.GetProblemM
 			{"description": bson.M{"$regex": req.SearchQuery, "$options": "i"}},
 		}
 	}
+
 	opts := options.Find().SetSkip(int64(req.Page-1) * int64(req.PageSize)).SetLimit(int64(req.PageSize))
 	cursor, err := r.problemsCollection.Find(ctx, filter, opts)
 	if err != nil {
@@ -977,6 +986,7 @@ func ToProblem(p model.Problem) *pb.Problem {
 		ValidateCode:       validateCode,
 		Validated:          p.Validated,
 		ValidatedAt:        validatedAt,
+		Visible:            p.Visible,
 	}
 }
 

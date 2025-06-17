@@ -34,6 +34,7 @@ type Problem struct {
 	ValidateCode       map[string]CodeData `bson:"validate_code"`
 	Validated          bool                `bson:"validated"`
 	ValidatedAt        *time.Time          `bson:"validated_at,omitempty"`
+	Visible            bool                `bson:"visible"`
 }
 
 type ProblemDone struct {

@@ -83,7 +83,7 @@ func (s *ProblemService) StartCronJob() {
 	c := cron.New()
 
 	// schedule leaderboard sync every hour
-	c.AddFunc("@every 1min", func() {
+	c.AddFunc("@every 1h", func() {
 		ctx := context.Background()
 		s.logger.Log(zapcore.InfoLevel, "", "Syncing MongoDB Submissions and RedisBoard "+time.Now().String(), map[string]any{
 			"method": "SYNC LEADERBOARD CRON JOB",

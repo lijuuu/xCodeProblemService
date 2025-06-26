@@ -6,7 +6,7 @@ require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617083829-93ec7bd26d81
+	github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617105653-8924f3a48e9e
 	github.com/lijuuu/RedisBoard v0.0.0-20250617061554-f5fae0021242
 	github.com/nats-io/nats.go v1.39.1
 	github.com/robfig/cron/v3 v3.0.1

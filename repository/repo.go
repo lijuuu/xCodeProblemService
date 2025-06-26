@@ -482,8 +482,6 @@ func (r *Repository) ListProblems(ctx context.Context, req *pb.ListProblemsReque
 		}
 	}
 
-
-
 	opts := options.Find().SetSkip(int64(req.Page-1) * int64(req.PageSize)).SetLimit(int64(req.PageSize))
 	cursor, err := r.problemsCollection.Find(ctx, filter, opts)
 	if err != nil {
@@ -870,6 +868,7 @@ func (r *Repository) GetSubmissionsByOptionalProblemID(ctx context.Context, req 
 				Seconds: sub.SubmittedAt.Unix(),
 				Nanos:   int32(sub.SubmittedAt.Nanosecond()),
 			},
+			UserCode:      sub.UserCode,
 			Score:         int32(sub.Score),
 			Status:        sub.Status,
 			Output:        sub.Output,

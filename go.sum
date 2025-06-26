@@ -36,6 +36,8 @@ github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617071542-88f1302a91ca h1:jG0msn1
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617071542-88f1302a91ca/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617083829-93ec7bd26d81 h1:1WrOOlLe99NG+AQU2nXSvfUbKChnqbv4FqKWZZNm5z4=
 github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617083829-93ec7bd26d81/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617105653-8924f3a48e9e h1:Nqw0PkECKbO+lSIsQWIJNhtUa07bsPDHIOsG7WnPoXQ=
+github.com/lijuuu/GlobalProtoXcode v0.0.0-20250617105653-8924f3a48e9e/go.mod h1:Tt/SSoiRXSrQ+uVdaJrJsI5rWicuZcRDFOsrybrvclA=
 github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f h1:/fpeGrGBnnM2LsKHOur3FkCZ+doc4XLeLR37cQ4FbUM=
 github.com/lijuuu/RedisBoard v0.0.0-20250415062756-74a1d2561d7f/go.mod h1:wXEeA+Z6PmIJwu0lPBz0AbejQMtKjk4vvIxkUpd49h0=
 github.com/lijuuu/RedisBoard v0.0.0-20250617061554-f5fae0021242 h1:sUGSb3/1R7M5BcN12Vvkfx+iSM6+XHowGN27Arzw81g=

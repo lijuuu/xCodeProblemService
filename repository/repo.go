@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 	"xcode/model"
@@ -1245,547 +1244,6 @@ func (r *Repository) GetMonthlyContributionHistory(userID string, month, year in
 	}, nil
 }
 
-func (r *Repository) CreateChallenge(ctx context.Context, req *pb.CreateChallengeRequest, roomCode, password string) (*pb.CreateChallengeResponse, error) {
-	count, err := r.challengeCollection.CountDocuments(ctx, bson.M{"title": req.Title, "deleted_at": nil})
-	if err != nil {
-		return nil, err
-	}
-	if count > 0 {
-		return nil, fmt.Errorf("challenge with this title already exists")
-	}
-
-	now := time.Now().Unix()
-	challenge := model.Challenge{
-		Title:               req.Title,
-		CreatorID:           req.CreatorId,
-		Difficulty:          req.Difficulty,
-		IsPrivate:           req.IsPrivate,
-		RoomCode:            roomCode,
-		Password:            password,
-		ProblemIDs:          req.ProblemIds,
-		TimeLimit:           req.TimeLimit,
-		CreatedAt:           now,
-		IsActive:            true,
-		ParticipantIDs:      []string{req.CreatorId},
-		UserProblemMetadata: make(map[string][]model.ChallengeProblemMetadata),
-		Status:              "CREATED",
-	}
-
-	res, err := r.challengeCollection.InsertOne(ctx, challenge)
-	if err != nil {
-		return nil, err
-	}
-
-	id := res.InsertedID.(primitive.ObjectID).Hex()
-	return &pb.CreateChallengeResponse{
-		Id:       id,
-		Password: password,
-		JoinUrl:  fmt.Sprintf("https://xcode.com/challenges/join/%s", id),
-	}, nil
-}
-
-func (r *Repository) GetChallenge(ctx context.Context, req *pb.GetChallengeDetailsRequest) (*pb.GetChallengeDetailsResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &pb.GetChallengeDetailsResponse{
-		Challenge:   ToPBChallenge(challenge),
-		Leaderboard: nil,
-	}, nil
-}
-
-func (r *Repository) GetChallengeDetails(ctx context.Context, req *pb.GetChallengeDetailsRequest) (*pb.GetChallengeDetailsResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	leaderboard, err := r.GetChallengeLeaderboard(ctx, req.Id)
-	if err != nil {
-		return nil, err
-	}
-
-	metadataList, exists := challenge.UserProblemMetadata[req.UserId]
-	if !exists {
-		metadataList = []model.ChallengeProblemMetadata{}
-	}
-
-	pbMetadata := make([]*pb.ChallengeProblemMetadata, len(metadataList))
-	for i, m := range metadataList {
-		pbMetadata[i] = ToPBChallengeProblemMetadata(m)
-	}
-
-	return &pb.GetChallengeDetailsResponse{
-		Challenge:   ToPBChallenge(challenge),
-		Leaderboard: leaderboard,
-	}, nil
-}
-
-func (r *Repository) GetPublicChallenges(ctx context.Context, req *pb.GetPublicChallengesRequest) (*pb.GetPublicChallengesResponse, error) {
-	filter := bson.M{
-		"deleted_at": nil,
-		"is_private": false,
-	}
-
-	if req.Difficulty != "" {
-		filter["difficulty"] = req.Difficulty
-	}
-	if req.IsActive {
-		filter["is_active"] = true
-	}
-
-	opts := options.Find().
-		SetSkip(int64(req.Page-1) * int64(req.PageSize)).
-		SetLimit(int64(req.PageSize))
-
-	cursor, err := r.challengeCollection.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find challenges: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	var challenges []model.Challenge
-	if err = cursor.All(ctx, &challenges); err != nil {
-		return nil, fmt.Errorf("failed to decode challenges: %w", err)
-	}
-
-	pbChallenges := make([]*pb.Challenge, len(challenges))
-	for i, c := range challenges {
-		pbChallenges[i] = ToPBChallenge(c)
-		pbChallenges[i].ProblemIds = nil
-		pbChallenges[i].ParticipantIds = nil
-		pbChallenges[i].UserProblemMetadata = nil
-	}
-
-	return &pb.GetPublicChallengesResponse{
-		Challenges: pbChallenges,
-	}, nil
-}
-
-func (r *Repository) JoinChallenge(ctx context.Context, req *pb.JoinChallengeRequest) (*pb.JoinChallengeResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.ChallengeId)
-	if err != nil {
-		return nil, fmt.Errorf("invalid challenge_id")
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if challenge.IsPrivate && (req.Password == nil || *req.Password != challenge.Password) {
-		return &pb.JoinChallengeResponse{
-			ChallengeId: req.ChallengeId,
-			Success:     false,
-			Message:     "Invalid password",
-		}, nil
-	}
-
-	if slices.Contains(challenge.ParticipantIDs, req.UserId) {
-		return &pb.JoinChallengeResponse{
-			ChallengeId: req.ChallengeId,
-			Success:     true,
-			Message:     "Already joined",
-		}, nil
-	}
-
-	update := bson.M{
-		"$push": bson.M{"participant_ids": req.UserId},
-		"$set":  bson.M{"updated_at": time.Now().Unix()},
-	}
-
-	result, err := r.challengeCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
-	if err != nil {
-		return nil, err
-	}
-	if result.MatchedCount == 0 {
-		return nil, fmt.Errorf("challenge not found")
-	}
-
-	return &pb.JoinChallengeResponse{
-		ChallengeId: req.ChallengeId,
-		Success:     true,
-		Message:     "Joined successfully",
-	}, nil
-}
-
-func (r *Repository) StartChallenge(ctx context.Context, req *pb.StartChallengeRequest) (*pb.StartChallengeResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.ChallengeId)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if challenge.CreatorID != req.UserId {
-		return nil, fmt.Errorf("only creator can start challenge")
-	}
-	if challenge.IsActive {
-		return nil, fmt.Errorf("challenge already active")
-	}
-
-	startTime := time.Now().Unix()
-	update := bson.M{
-		"$set": bson.M{
-			"is_active":  true,
-			"start_time": startTime,
-			"status":     "ACTIVE",
-			"updated_at": time.Now().Unix(),
-			"end_time":   startTime + int64(challenge.TimeLimit)*60,
-		},
-	}
-
-	result, err := r.challengeCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
-	if err != nil {
-		return nil, err
-	}
-	if result.MatchedCount == 0 {
-		return nil, fmt.Errorf("challenge not found")
-	}
-
-	return &pb.StartChallengeResponse{
-		Success:   true,
-		StartTime: startTime,
-	}, nil
-}
-
-func (r *Repository) EndChallenge(ctx context.Context, req *pb.EndChallengeRequest) (*pb.EndChallengeResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.ChallengeId)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if challenge.CreatorID != req.UserId {
-		return nil, fmt.Errorf("only creator can end challenge")
-	}
-	if !challenge.IsActive {
-		return nil, fmt.Errorf("challenge not active")
-	}
-
-	update := bson.M{
-		"$set": bson.M{
-			"is_active":  false,
-			"status":     "COMPLETED",
-			"end_time":   time.Now().Unix(),
-			"updated_at": time.Now().Unix(),
-		},
-	}
-
-	result, err := r.challengeCollection.UpdateOne(ctx, bson.M{"_id": id}, update)
-	if err != nil {
-		return nil, err
-	}
-	if result.MatchedCount == 0 {
-		return nil, fmt.Errorf("challenge not found")
-	}
-
-	return &pb.EndChallengeResponse{
-		Success: true,
-	}, nil
-}
-
-func (r *Repository) GetSubmissionStatus(ctx context.Context, req *pb.GetSubmissionStatusRequest) (*pb.GetSubmissionStatusResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.SubmissionId)
-	if err != nil {
-		return nil, err
-	}
-
-	var submission model.Submission
-	err = r.submissionsCollection.FindOne(ctx, bson.M{"_id": id}).Decode(&submission)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("submission not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return &pb.GetSubmissionStatusResponse{
-		Submission: ToPBSubmission(submission),
-	}, nil
-}
-
-func (r *Repository) GetChallengeSubmissions(ctx context.Context, req *pb.GetChallengeSubmissionsRequest) (*pb.GetChallengeSubmissionsResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.ChallengeId)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge struct{}
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	cursor, err := r.submissionsCollection.Find(ctx, bson.M{"challenge_id": req.ChallengeId})
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var submissions []model.Submission
-	if err = cursor.All(ctx, &submissions); err != nil {
-		return nil, err
-	}
-
-	pbSubmissions := make([]*pb.Submission, len(submissions))
-	for i, s := range submissions {
-		pbSubmissions[i] = ToPBSubmission(s)
-	}
-
-	return &pb.GetChallengeSubmissionsResponse{
-		Submissions: pbSubmissions,
-	}, nil
-}
-
-func (r *Repository) GetChallengeLeaderboard(ctx context.Context, challengeID string) ([]*pb.LeaderboardEntry, error) {
-	id, err := primitive.ObjectIDFromHex(challengeID)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	leaderboard := make([]*pb.LeaderboardEntry, 0)
-	for userID, metadataList := range challenge.UserProblemMetadata {
-		totalScore := 0
-		problemsCompleted := 0
-		for _, metadata := range metadataList {
-			totalScore += metadata.Score
-			problemsCompleted++
-		}
-
-		leaderboard = append(leaderboard, &pb.LeaderboardEntry{
-			UserId:            userID,
-			ProblemsCompleted: int32(problemsCompleted),
-			TotalScore:        int32(totalScore),
-		})
-	}
-
-	for i := 0; i < len(leaderboard)-1; i++ {
-		for j := i + 1; j < len(leaderboard); j++ {
-			if leaderboard[i].TotalScore < leaderboard[j].TotalScore {
-				leaderboard[i], leaderboard[j] = leaderboard[j], leaderboard[i]
-			}
-		}
-	}
-
-	for i, entry := range leaderboard {
-		entry.Rank = int32(i + 1)
-	}
-
-	return leaderboard, nil
-}
-
-func (r *Repository) GetUserStats(ctx context.Context, req *pb.GetUserStatsRequest) (*pb.GetUserStatsResponse, error) {
-	pipeline := mongo.Pipeline{
-		{{Key: "$match", Value: bson.M{"participant_ids": req.UserId, "deleted_at": nil}}},
-		{{Key: "$unwind", Value: bson.M{"path": "$user_problem_metadata." + req.UserId, "preserveNullAndEmptyArrays": true}}},
-		{{Key: "$group", Value: bson.M{
-			"_id":                "$_id",
-			"problems_completed": bson.M{"$sum": 1},
-			"total_score":        bson.M{"$sum": "$user_problem_metadata." + req.UserId + ".score"},
-			"total_time_taken":   bson.M{"$sum": "$user_problem_metadata." + req.UserId + ".time_taken"},
-		}}},
-	}
-
-	cursor, err := r.challengeCollection.Aggregate(ctx, pipeline)
-	if err != nil {
-		return nil, err
-	}
-	defer cursor.Close(ctx)
-
-	var stats model.UserStats
-	challengesCompleted := 0
-	challengeStats := make(map[string]*pb.ChallengeStat)
-	for cursor.Next(ctx) {
-		var result struct {
-			ProblemsCompleted int32 `bson:"problems_completed"`
-			TotalScore        int32 `bson:"total_score"`
-			TotalTimeTaken    int64 `bson:"total_time_taken"`
-		}
-		if err := cursor.Decode(&result); err != nil {
-			return nil, err
-		}
-		stats.ProblemsCompleted += result.ProblemsCompleted
-		stats.TotalTimeTaken += result.TotalTimeTaken
-		stats.Score += float64(result.TotalScore)
-		challengesCompleted++
-
-		leaderboard, err := r.GetChallengeLeaderboard(ctx, req.UserId)
-		if err != nil {
-			continue
-		}
-		rank := int32(0)
-		for _, entry := range leaderboard {
-			if entry.UserId == req.UserId {
-				rank = entry.Rank
-				break
-			}
-		}
-		challengeStats[req.UserId] = &pb.ChallengeStat{
-			Rank:              rank,
-			ProblemsCompleted: result.ProblemsCompleted,
-			TotalScore:        result.TotalScore,
-		}
-	}
-
-	return &pb.GetUserStatsResponse{
-		Stats: &pb.UserStats{
-			UserId:              req.UserId,
-			ProblemsCompleted:   stats.ProblemsCompleted,
-			TotalTimeTaken:      stats.TotalTimeTaken,
-			ChallengesCompleted: int32(challengesCompleted),
-			Score:               stats.Score,
-			ChallengeStats:      challengeStats,
-		},
-	}, nil
-}
-
-func (r *Repository) GetChallengeUserStats(ctx context.Context, req *pb.GetChallengeUserStatsRequest) (*pb.GetChallengeUserStatsResponse, error) {
-	id, err := primitive.ObjectIDFromHex(req.ChallengeId)
-	if err != nil {
-		return nil, err
-	}
-
-	var challenge model.Challenge
-	err = r.challengeCollection.FindOne(ctx, bson.M{"_id": id, "deleted_at": nil}).Decode(&challenge)
-	if err == mongo.ErrNoDocuments {
-		return nil, fmt.Errorf("challenge not found")
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	metadataList, exists := challenge.UserProblemMetadata[req.UserId]
-	if !exists {
-		return &pb.GetChallengeUserStatsResponse{
-			UserId:                   req.UserId,
-			ProblemsCompleted:        0,
-			TotalScore:               0,
-			Rank:                     0,
-			ChallengeProblemMetadata: nil,
-		}, nil
-	}
-
-	problemsCompleted := 0
-	totalScore := 0
-	pbMetadata := make([]*pb.ChallengeProblemMetadata, len(metadataList))
-	for i, m := range metadataList {
-		problemsCompleted++
-		totalScore += m.Score
-		pbMetadata[i] = ToPBChallengeProblemMetadata(m)
-	}
-
-	leaderboard, err := r.GetChallengeLeaderboard(ctx, req.ChallengeId)
-	if err != nil {
-		return nil, err
-	}
-
-	rank := int32(0)
-	for _, entry := range leaderboard {
-		if entry.UserId == req.UserId {
-			rank = entry.Rank
-			break
-		}
-	}
-
-	return &pb.GetChallengeUserStatsResponse{
-		UserId:                   req.UserId,
-		ProblemsCompleted:        int32(problemsCompleted),
-		TotalScore:               int32(totalScore),
-		Rank:                     rank,
-		ChallengeProblemMetadata: pbMetadata,
-	}, nil
-}
-
-func ToPBChallenge(c model.Challenge) *pb.Challenge {
-	userProblemMetadata := make(map[string]*pb.ProblemMetadataList)
-	for userID, metadataList := range c.UserProblemMetadata {
-		pbMetadata := make([]*pb.ChallengeProblemMetadata, len(metadataList))
-		for i, m := range metadataList {
-			pbMetadata[i] = ToPBChallengeProblemMetadata(m)
-		}
-		userProblemMetadata[userID] = &pb.ProblemMetadataList{ChallengeProblemMetadata: pbMetadata}
-	}
-
-	return &pb.Challenge{
-		Id:                  c.ID.Hex(),
-		Title:               c.Title,
-		CreatorId:           c.CreatorID,
-		Difficulty:          c.Difficulty,
-		IsPrivate:           c.IsPrivate,
-		Password:            &c.Password,
-		ProblemIds:          c.ProblemIDs,
-		TimeLimit:           c.TimeLimit,
-		CreatedAt:           c.CreatedAt,
-		IsActive:            c.IsActive,
-		ParticipantIds:      c.ParticipantIDs,
-		UserProblemMetadata: userProblemMetadata,
-		Status:              c.Status,
-		StartTime:           c.StartTime,
-		EndTime:             c.EndTime,
-	}
-}
-
-func ToPBChallengeProblemMetadata(m model.ChallengeProblemMetadata) *pb.ChallengeProblemMetadata {
-	return &pb.ChallengeProblemMetadata{
-		ProblemId:   m.ProblemID,
-		Score:       int32(m.Score),
-		TimeTaken:   m.TimeTaken,
-		CompletedAt: m.CompletedAt,
-	}
-}
-
 func ToPBSubmission(s model.Submission) *pb.Submission {
 	var challengeID string
 	if s.ChallengeID != nil {
@@ -1811,56 +1269,6 @@ func ToPBSubmission(s model.Submission) *pb.Submission {
 	}
 }
 
-// GetChallengeHistory retrieves a paginated list of challenges for a user
-func (r *Repository) GetChallengeHistory(ctx context.Context, req *pb.GetChallengeHistoryRequest) (*pb.GetChallengeHistoryResponse, error) {
-	// Build filter for challenges where user is a participant
-	filter := bson.M{
-		"participant_ids": req.UserId,
-		"deleted_at":      nil,
-		"is_private":      req.IsPrivate,
-	}
-
-	// fmt.Println(req)
-
-	// Pagination options
-	opts := options.Find().
-		SetSkip(int64(req.Page-1) * int64(req.PageSize)).
-		SetLimit(int64(req.PageSize)).
-		SetSort(bson.M{"created_at": -1}) // Sort by creation date, newest first
-
-	// Query challenges
-	cursor, err := r.challengeCollection.Find(ctx, filter, opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find challenges: %w", err)
-	}
-	defer cursor.Close(ctx)
-
-	// Decode challenges
-	var challenges []model.Challenge
-	if err = cursor.All(ctx, &challenges); err != nil {
-		return nil, fmt.Errorf("failed to decode challenges: %w", err)
-	}
-
-	// Count total matching documents
-	total, err := r.challengeCollection.CountDocuments(ctx, filter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to count challenges: %w", err)
-	}
-
-	// Convert to protobuf
-	pbChallenges := make([]*pb.Challenge, len(challenges))
-	for i, c := range challenges {
-		pbChallenges[i] = ToPBChallenge(c)
-	}
-
-	return &pb.GetChallengeHistoryResponse{
-		Challenges: pbChallenges,
-		TotalCount: int32(total),
-		Page:       req.Page,
-		PageSize:   req.PageSize,
-	}, nil
-}
-
 func (r *Repository) ForceChangeUserCountryInSubmission(ctx context.Context, req *pb.ForceChangeUserEntityInSubmissionRequest) {
 	newEntity := strings.ToUpper(req.Entity)
 
@@ -1880,3 +1288,67 @@ func (r *Repository) ForceChangeUserCountryInSubmission(ctx context.Context, req
 		time.Sleep(time.Millisecond * 50) // simple backoff
 	}
 }
+
+func (r *Repository) GetBulkProblemMetadata(ctx context.Context, req *pb.GetBulkProblemMetadataRequest) (*pb.GetBulkProblemMetadataResponse, error) {
+	if len(req.ProblemIds) == 0 {
+		return &pb.GetBulkProblemMetadataResponse{}, nil
+	}
+
+	// build $in query directly using hex ids
+	filter := bson.M{
+		"_id": bson.M{
+			"$in": convertHexToObjectIDs(req.ProblemIds),
+		},
+		"visible": true,
+	}
+
+	cursor, err := r.problemsCollection.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var problems []model.Problem
+	if err := cursor.All(ctx, &problems); err != nil {
+		return nil, err
+	}
+
+	// build result
+	metadata := make([]*pb.BulkProblemMetadata, 0, len(problems))
+	for _, p := range problems {
+		metadata = append(metadata, &pb.BulkProblemMetadata{
+			ProblemId:  p.ID.Hex(),
+			Title:      p.Title,
+			Difficulty: p.Difficulty,
+			Tags:       p.Tags,
+		})
+	}
+
+	return &pb.GetBulkProblemMetadataResponse{
+		BulkProblemMetadata: metadata,
+	}, nil
+}
+
+
+//VerifyProblemExistenceBulk
+
+//RandomProblemIDsGenWithDifficultyRatio
+
+//ProblemIDsDoneByUserID
+
+
+
+
+
+
+// helper to convert hex strings to valid objectIDs
+func convertHexToObjectIDs(ids []string) []primitive.ObjectID {
+	objectIDs := make([]primitive.ObjectID, 0, len(ids))
+	for _, id := range ids {
+		if oid, err := primitive.ObjectIDFromHex(id); err == nil {
+			objectIDs = append(objectIDs, oid)
+		}
+	}
+	return objectIDs
+}
+
